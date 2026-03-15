@@ -81,6 +81,7 @@ type AppDataContextValue = {
   saveManualArticle: (input: ManualArticleInput) => ArticleRecord;
   updateArticle: (id: string, patch: Partial<ArticleRecord>) => ArticleRecord | undefined;
   deleteArticle: (id: string) => Promise<void>;
+  deleteArticles: (ids: string[]) => Promise<void>;
   saveDraft: (id: string) => Promise<ArticleRecord | undefined>;
   publishArticle: (id: string) => Promise<ArticleRecord | undefined>;
   regenerateAssets: (id: string, providerId?: ProviderId) => Promise<ArticleRecord | undefined>;
@@ -685,6 +686,15 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     });
   };
 
+  const deleteArticles = async (ids: string[]) => {
+    await Promise.all(ids.map((id) => deleteArticleApi(id)));
+    const idSet = new Set(ids);
+    updateState({
+      ...stateRef.current,
+      articles: stateRef.current.articles.filter((article) => !idSet.has(article.id)),
+    });
+  };
+
   const captureAccountSession = async (accountId?: string) => {
     return captureNoteSessionApi(accountId);
   };
@@ -729,6 +739,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     saveManualArticle,
     updateArticle,
     deleteArticle,
+    deleteArticles,
     saveDraft,
     publishArticle,
     regenerateAssets,

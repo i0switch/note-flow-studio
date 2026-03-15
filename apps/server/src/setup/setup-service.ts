@@ -140,8 +140,6 @@ export const saveSetupConfig = async (db: AppDatabase, input: SetupSaveInput) =>
     GEMINI_API_KEY: input.geminiApiKey ?? "",
     GEMINI_MODEL: input.geminiModel,
     ENABLE_REAL_NOTE_AUTOMATION: "true",
-    GEMINI_MODEL: input.geminiModel,
-    ENABLE_REAL_NOTE_AUTOMATION: "true",
     NOTE_UNOFFICIAL_API_URL: current.NOTE_UNOFFICIAL_API_URL ?? "",
     NOTE_UNOFFICIAL_API_TOKEN: current.NOTE_UNOFFICIAL_API_TOKEN ?? "",
     PINCHTAB_BASE_URL: current.PINCHTAB_BASE_URL ?? env.PINCHTAB_BASE_URL,
@@ -163,8 +161,6 @@ export const saveSetupConfig = async (db: AppDatabase, input: SetupSaveInput) =>
   env.GEMINI_API_KEY = input.geminiApiKey;
   env.GEMINI_MODEL = input.geminiModel;
   env.ENABLE_REAL_NOTE_AUTOMATION = true;
-  env.NOTE_LOGIN_ID = input.noteLoginId;
-  env.NOTE_LOGIN_PASSWORD = input.noteLoginPassword;
   env.PLAYWRIGHT_HEADLESS = input.playwrightHeadless;
   env.MOCK_AI_MODE = false;
 

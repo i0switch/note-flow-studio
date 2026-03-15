@@ -11,6 +11,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,13 +23,16 @@ import { toast } from "sonner";
 
 export default function ArticlesPage() {
   const navigate = useNavigate();
-  const { state, deleteArticle } = useAppData();
+  const { state, deleteArticle, deleteArticles } = useAppData();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [genreFilter, setGenreFilter] = useState("all");
   const [noteFilter, setNoteFilter] = useState("all");
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulk, setConfirmBulk] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   const filtered = state.articles.filter((article) => {
     if (search && !article.title.includes(search) && !article.keyword.includes(search)) return false;
@@ -40,17 +44,55 @@ export default function ArticlesPage() {
 
   const genres = Array.from(new Set(state.articles.map((article) => article.genre)));
 
+  const allFilteredSelected = filtered.length > 0 && filtered.every((a) => selected.has(a.id));
+  const someSelected = selected.size > 0;
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      const next = new Set(selected);
+      for (const a of filtered) next.delete(a.id);
+      setSelected(next);
+    } else {
+      const next = new Set(selected);
+      for (const a of filtered) next.add(a.id);
+      setSelected(next);
+    }
+  };
+
+  const toggleOne = (id: string) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  };
+
   const handleDeleteConfirm = async () => {
     if (!confirmId) return;
     setDeletingId(confirmId);
     setConfirmId(null);
     try {
       await deleteArticle(confirmId);
+      setSelected((prev) => { const next = new Set(prev); next.delete(confirmId); return next; });
       toast.success("記事を削除しました");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "削除に失敗しました");
     } finally {
       setDeletingId(null);
+    }
+  };
+
+  const handleBulkDeleteConfirm = async () => {
+    const ids = Array.from(selected);
+    setBulkDeleting(true);
+    setConfirmBulk(false);
+    try {
+      await deleteArticles(ids);
+      setSelected(new Set());
+      toast.success(`${ids.length}件の記事を削除しました`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "一括削除に失敗しました");
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -103,10 +145,36 @@ export default function ArticlesPage() {
         </div>
       </div>
 
+      {someSelected && (
+        <div className="flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-2.5">
+          <span className="text-sm text-muted-foreground">{selected.size}件選択中</span>
+          <Button
+            variant="destructive"
+            size="sm"
+            className="gap-1.5 ml-auto"
+            disabled={bulkDeleting}
+            onClick={() => setConfirmBulk(true)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {bulkDeleting ? "削除中..." : `${selected.size}件を削除`}
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+            選択解除
+          </Button>
+        </div>
+      )}
+
       <div className="card-elevated overflow-hidden p-0">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10 pl-4">
+                <Checkbox
+                  checked={allFilteredSelected}
+                  onCheckedChange={toggleSelectAll}
+                  aria-label="すべて選択"
+                />
+              </TableHead>
               <TableHead className="text-xs">タイトル</TableHead>
               <TableHead className="text-xs">キーワード</TableHead>
               <TableHead className="text-xs">状態</TableHead>
@@ -119,13 +187,21 @@ export default function ArticlesPage() {
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                   該当する記事がありません
                 </TableCell>
               </TableRow>
             ) : (
               filtered.map((article) => (
-                <TableRow key={article.id} className="cursor-pointer transition-colors hover:bg-muted/30" onClick={() => navigate(`/articles/${article.id}`)}>
+                <TableRow
+                  key={article.id}
+                  className="cursor-pointer transition-colors hover:bg-muted/30"
+                  data-selected={selected.has(article.id)}
+                  onClick={() => navigate(`/articles/${article.id}`)}
+                >
+                  <TableCell className="pl-4" onClick={(e) => { e.stopPropagation(); toggleOne(article.id); }}>
+                    <Checkbox checked={selected.has(article.id)} aria-label="選択" />
+                  </TableCell>
                   <TableCell className="max-w-[300px] truncate text-sm font-medium">{article.title}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{article.keyword}</TableCell>
                   <TableCell><StatusBadge status={article.status as StatusType} /></TableCell>
@@ -157,6 +233,7 @@ export default function ArticlesPage() {
         </Table>
       </div>
 
+      {/* 単体削除 */}
       <AlertDialog open={confirmId !== null} onOpenChange={(open) => { if (!open) setConfirmId(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -169,6 +246,24 @@ export default function ArticlesPage() {
             <AlertDialogCancel>キャンセル</AlertDialogCancel>
             <AlertDialogAction onClick={() => void handleDeleteConfirm()} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
               削除する
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 一括削除 */}
+      <AlertDialog open={confirmBulk} onOpenChange={(open) => { if (!open) setConfirmBulk(false); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{selected.size}件の記事を削除しますか？</AlertDialogTitle>
+            <AlertDialogDescription>
+              この操作は取り消せません。選択した{selected.size}件の記事がすべて削除されます。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>キャンセル</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleBulkDeleteConfirm()} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {selected.size}件を削除する
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

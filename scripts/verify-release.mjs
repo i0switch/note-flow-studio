@@ -47,7 +47,7 @@ const main = async () => {
         APP_DATA_DIR: "./data",
         PLAYWRIGHT_BROWSERS_PATH: "./ms-playwright",
         SERVE_WEB_FROM_SERVER: "true",
-        WEB_DIST_DIR: "./apps/web/dist",
+        WEB_DIST_DIR: "./saas-hub/dist",
         OPEN_BROWSER_ON_START: "false",
         APP_PORT: String(port)
       },

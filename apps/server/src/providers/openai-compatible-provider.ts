@@ -71,13 +71,38 @@ export class OpenAICompatibleProvider implements AiProvider {
       return { status: "warn", detail: "APIキー未設定" };
     }
     try {
-      const response = await fetch(`${this.options.baseUrl}/models`, {
+      // First try GET /models (lightweight)
+      const modelsRes = await fetch(`${this.options.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${this.options.apiKey}` },
       });
-      if (response.ok) {
+      if (modelsRes.ok) {
         return { status: "ok", detail: `${this.options.providerName} (${this.options.model}) 接続OK` };
       }
-      return { status: "warn", detail: `${this.options.providerName} 接続確認失敗: ${response.status}` };
+      // 401/403 = definitely wrong key
+      if (modelsRes.status === 401 || modelsRes.status === 403) {
+        return { status: "error", detail: `${this.options.providerName} 認証失敗 (HTTP ${modelsRes.status}) — APIキーを確認してください` };
+      }
+      // /models が実装されていないプロバイダー向け: minimal chat completion で確認
+      const chatRes = await fetch(`${this.options.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.options.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: this.options.model,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 1,
+        }),
+      });
+      if (chatRes.ok || chatRes.status === 400) {
+        // 400 = リクエスト形式エラーだがAPIキー自体は有効
+        return { status: "ok", detail: `${this.options.providerName} (${this.options.model}) 接続OK` };
+      }
+      if (chatRes.status === 401 || chatRes.status === 403) {
+        return { status: "error", detail: `${this.options.providerName} 認証失敗 (HTTP ${chatRes.status}) — APIキーを確認してください` };
+      }
+      return { status: "warn", detail: `${this.options.providerName} 接続確認失敗: HTTP ${chatRes.status}` };
     } catch {
       return { status: "error", detail: `${this.options.providerName} 接続エラー` };
     }

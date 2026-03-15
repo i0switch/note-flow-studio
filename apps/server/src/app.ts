@@ -57,6 +57,7 @@ const now = () => new Date().toISOString();
 type AppOptions = {
   db?: AppDatabase;
   aiProvider?: AiProvider;
+  stateFilePath?: string;
 };
 
 const summarize = (text: string) =>
@@ -404,7 +405,7 @@ export const buildApp = async (options: AppOptions = {}) => {
   });
 
   // saas-hub adapter routes (includes /api/diagnostics/run with compatible response shape)
-  const stateService = new SaasHubStateService();
+  const stateService = new SaasHubStateService(options.stateFilePath);
   const providerRegistry = new ProviderRegistry(aiProvider, stateService);
   await registerSaasHubAdapterRoutes(app, {
     db,

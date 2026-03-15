@@ -3,6 +3,7 @@ import { GeminiProvider, type AiProvider } from "../providers/ai-provider.js";
 import { ClaudeProvider } from "../providers/claude-provider.js";
 import { OpenAICompatibleProvider } from "../providers/openai-compatible-provider.js";
 import { GitHubCopilotProvider } from "../providers/github-copilot-provider.js";
+import { CodexProvider, readLocalCodexToken } from "../providers/codex-provider.js";
 import type { SaasHubStateService } from "./saas-hub-state-service.js";
 
 export type ProviderId =
@@ -12,6 +13,7 @@ export type ProviderId =
   | "codex_cli"
   | "github_copilot"
   | "alibaba_model_studio"
+  | "alibaba_coding"
   | "openrouter"
   | "groq"
   | "deepseek"
@@ -45,6 +47,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   codex_cli: "Codex CLI",
   github_copilot: "GitHub Copilot",
   alibaba_model_studio: "Alibaba Model Studio",
+  alibaba_coding: "Alibaba CodingPlan",
   openrouter: "OpenRouter",
   groq: "Groq",
   deepseek: "DeepSeek",
@@ -56,9 +59,10 @@ const PROVIDER_MODELS: Record<ProviderId, string> = {
   gemini: "gemini-2.0-flash",
   claude: "claude-3-7-sonnet-latest",
   openai: "gpt-4.1-mini",
-  codex_cli: "gpt-5-codex",
+  codex_cli: "codex-mini-latest",
   github_copilot: "github-copilot/gpt-5.4",
   alibaba_model_studio: "qwen-plus",
+  alibaba_coding: "qwen-coder-plus",
   openrouter: "openai/gpt-4.1-mini",
   groq: "llama-3.3-70b-versatile",
   deepseek: "deepseek-chat",
@@ -69,6 +73,7 @@ const PROVIDER_MODELS: Record<ProviderId, string> = {
 const PROVIDER_BASE_URLS: Partial<Record<ProviderId, string>> = {
   openai: "https://api.openai.com/v1",
   alibaba_model_studio: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  alibaba_coding: "https://coding-intl.dashscope.aliyuncs.com/v1",
   openrouter: "https://openrouter.ai/api/v1",
   groq: "https://api.groq.com/openai/v1",
   deepseek: "https://api.deepseek.com/v1",
@@ -83,6 +88,7 @@ const ALL_PROVIDER_IDS: ProviderId[] = [
   "codex_cli",
   "github_copilot",
   "alibaba_model_studio",
+  "alibaba_coding",
   "openrouter",
   "groq",
   "deepseek",
@@ -94,17 +100,18 @@ function makeDefault(id: ProviderId): ProviderSummary {
   return {
     id,
     label: PROVIDER_LABELS[id],
-    authMode: id === "github_copilot" ? "oauth" : id === "codex_cli" ? "local_auth" : "api_key",
+    authMode: id === "github_copilot" ? "oauth" : "api_key",
     configured: false,
     reachable: false,
     usable: false,
-    enabled: true,
+    enabled: id !== "xai" && id !== "groq",
     model: PROVIDER_MODELS[id],
     baseUrl: PROVIDER_BASE_URLS[id] ?? null,
     lastTestStatus: "pending",
     lastTestError: null,
     lastTestAt: null,
     ...(id === "github_copilot" ? { oauthClientSource: "none" as const, configuredClientId: null } : {}),
+    ...(id === "codex_cli" ? { authMode: "local_auth" as const } : {}),
   };
 }
 
@@ -166,6 +173,27 @@ export class ProviderRegistry {
       this.summaries.gemini.usable = true;
       this.summaries.gemini.model = env.GEMINI_MODEL;
     }
+
+    // Auto-restore GitHub Copilot usable state if auth tokens are present in sidecar
+    const copilotAuth = (state as Record<string, unknown>).githubCopilotAuth as
+      | { githubToken?: string }
+      | undefined;
+    if (copilotAuth?.githubToken) {
+      this.summaries.github_copilot.configured = true;
+      this.summaries.github_copilot.usable = true;
+      this.summaries.github_copilot.reachable = true;
+    }
+
+    // Auto-detect Codex CLI local auth (~/.codex/auth.json)
+    const codexToken = await readLocalCodexToken().catch(() => null);
+    if (codexToken) {
+      this.summaries.codex_cli.configured = true;
+      this.summaries.codex_cli.usable = true;
+    }
+
+    // Always enforce disabled state for xAI and Groq unless explicitly enabled via persisted config
+    if (!persisted?.xai?.enabled) this.summaries.xai.enabled = false;
+    if (!persisted?.groq?.enabled) this.summaries.groq.enabled = false;
   }
 
   getAll(): Record<ProviderId, ProviderSummary> {
@@ -220,10 +248,14 @@ export class ProviderRegistry {
         return new OpenAICompatibleProvider({ providerName: "xAI", apiKey, model, baseUrl: baseUrl || "https://api.x.ai/v1" });
       case "alibaba_model_studio":
         return new OpenAICompatibleProvider({ providerName: "Alibaba Model Studio", apiKey, model, baseUrl: baseUrl || "https://dashscope-intl.aliyuncs.com/compatible-mode/v1" });
+      case "alibaba_coding":
+        return new OpenAICompatibleProvider({ providerName: "Alibaba CodingPlan", apiKey, model, baseUrl: baseUrl || "https://coding-intl.dashscope.aliyuncs.com/v1" });
       case "custom_openai_compatible":
         return new OpenAICompatibleProvider({ providerName: "Custom OpenAI互換", apiKey, model, baseUrl });
       case "github_copilot":
         return new GitHubCopilotProvider({ stateService: this.stateService, model, configuredClientId: summary.configuredClientId });
+      case "codex_cli":
+        return new CodexProvider({ apiKey, model });
       default:
         return null;
     }

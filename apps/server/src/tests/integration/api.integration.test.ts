@@ -11,6 +11,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("API integration", () => {
   let app: Awaited<ReturnType<typeof buildApp>>;
+  let tmpStateFile: string;
 
   beforeEach(async () => {
     env.MOCK_AI_MODE = true;
@@ -18,11 +19,13 @@ describe("API integration", () => {
     env.MOCK_PLAYWRIGHT_RESULT = "success";
     env.MOCK_PINCHTAB_RESULT = "success";
     env.ENABLE_REAL_NOTE_AUTOMATION = false;
-    app = await buildApp({ db: createDatabase(":memory:") });
+    tmpStateFile = path.join(os.tmpdir(), `note-local-state-${Date.now()}.json`);
+    app = await buildApp({ db: createDatabase(":memory:"), stateFilePath: tmpStateFile });
   });
 
   afterEach(async () => {
     await app.close();
+    await fs.unlink(tmpStateFile).catch(() => {});
   });
 
   const waitForJob = async (jobId: number) => {
@@ -506,6 +509,105 @@ describe("API integration", () => {
     expect(names).toContain("node");
     expect(names).toContain("playwright-browser");
     expect(names).toContain("pinchtab");
+  });
+
+  it("GET /api/ai/providers → プロバイダー一覧が返る", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/ai/providers" });
+    expect(res.statusCode).toBe(200);
+    const providers = res.json().providers as Record<string, unknown>;
+    expect(typeof providers).toBe("object");
+    expect(providers).not.toBeNull();
+    expect("gemini" in providers).toBe(true);
+  });
+
+  it("PUT /api/ai/providers/gemini → モデル名を更新できる", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/ai/providers/gemini",
+      payload: { model: "gemini-test-model", enabled: true },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().provider.model).toBe("gemini-test-model");
+  });
+
+  it("PUT /api/ai/providers/no-such-provider → 404 を返す", async () => {
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/ai/providers/no-such-provider",
+      payload: { model: "x" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("GET /api/ai/providers/github-copilot/status → 接続状態フィールドを含む", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/ai/providers/github-copilot/status",
+    });
+    expect(res.statusCode).toBe(200);
+    const { status } = res.json() as { status: Record<string, unknown> };
+    expect(typeof status.githubTokenPresent).toBe("boolean");
+    expect(typeof status.copilotTokenReady).toBe("boolean");
+    expect(typeof status.configured).toBe("boolean");
+  });
+
+  it("GET /api/ai/providers/codex-cli/status → Codex のステータスを返す", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/ai/providers/codex-cli/status",
+    });
+    expect(res.statusCode).toBe(200);
+    const { status } = res.json() as { status: Record<string, unknown> };
+    expect(status.id).toBe("codex_cli");
+    expect(status.authMode).toBe("local_auth");
+    expect(typeof status.model).toBe("string");
+  });
+
+  it("POST /api/note/draft → 無効な記事IDは 400 を返す", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/draft",
+      payload: { article: { id: "invalid", accountId: "1", saleMode: "normal" }, settings: {} },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("POST /api/note/draft → 生成済みジョブを下書き保存できる", async () => {
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs",
+      payload: {
+        keyword: "legacy draft test",
+        noteAccountId: 1,
+        promptTemplateId: 1,
+        referenceMaterialIds: [],
+        monetizationEnabled: false,
+        salesMode: "normal",
+        desiredPriceYen: null,
+        additionalInstruction: "",
+      },
+    });
+    await waitForJob(create.json().id);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/draft",
+      payload: {
+        article: { id: String(create.json().id), accountId: "1", saleMode: "normal" },
+        settings: {},
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draftUrl).toContain("/mock/");
+  });
+
+  it("POST /api/note/publish → 無効な記事IDは 400 を返す", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/publish",
+      payload: { article: { id: "bad", accountId: "1", saleMode: "normal" }, settings: {} },
+    });
+    expect(res.statusCode).toBe(400);
   });
 
   it("存在しないジョブへの保存と公開は 400 を返す", async () => {

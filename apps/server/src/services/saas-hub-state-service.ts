@@ -7,8 +7,8 @@ const STATE_FILE = "saas-hub-state.json";
 export class SaasHubStateService {
   private readonly filePath: string;
 
-  constructor() {
-    this.filePath = resolveDataPath(STATE_FILE);
+  constructor(filePath?: string) {
+    this.filePath = filePath ?? resolveDataPath(STATE_FILE);
   }
 
   async load(): Promise<Record<string, unknown> | null> {

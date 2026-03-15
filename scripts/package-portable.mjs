@@ -69,7 +69,7 @@ set ENV_FILE_PATH=.env
 set APP_DATA_DIR=./data
 set PLAYWRIGHT_BROWSERS_PATH=./ms-playwright
 set SERVE_WEB_FROM_SERVER=true
-set WEB_DIST_DIR=./apps/web/dist
+set WEB_DIST_DIR=./saas-hub/dist
 set OPEN_BROWSER_ON_START=true
 if exist ".\\runtime\\node.exe" (
   ".\\runtime\\node.exe" ".\\apps\\server\\dist\\apps\\server\\src\\server.js"
@@ -112,7 +112,7 @@ const main = async () => {
   await copy(path.join(rootDir, "packages", "shared", "package.json"), path.join(releaseDir, "packages", "shared", "package.json"));
   await copy(path.join(rootDir, "apps", "server", "dist"), path.join(releaseDir, "apps", "server", "dist"));
   await copy(path.join(rootDir, "packages", "shared", "dist"), path.join(releaseDir, "packages", "shared", "dist"));
-  await copy(path.join(rootDir, "apps", "web", "dist"), path.join(releaseDir, "apps", "web", "dist"));
+  await copy(path.join(rootDir, "saas-hub", "dist"), path.join(releaseDir, "saas-hub", "dist"));
   await copy(path.join(rootDir, ".env.example"), path.join(releaseDir, ".env.example"));
   await copy(path.join(rootDir, "TEST_RESULTS.md"), path.join(releaseDir, "TEST_RESULTS.md"));
   await fs.mkdir(path.join(releaseDir, "data"), { recursive: true });

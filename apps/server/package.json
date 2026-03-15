@@ -10,6 +10,11 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test:unit": "vitest run src/tests/unit",
     "test:integration": "vitest run src/tests/integration",
+    "test:e2e:mock": "vitest run --config vitest.e2e.config.ts src/tests/e2e/mock",
+    "test:e2e:live:draft": "node ../../scripts/run-e2e-live.mjs draft",
+    "test:e2e:live:publish": "node ../../scripts/run-e2e-live.mjs publish",
+    "test:e2e:live:schedule": "node ../../scripts/run-e2e-live.mjs schedule",
+    "test:e2e:live": "node ../../scripts/run-e2e-live.mjs all",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts"
   },

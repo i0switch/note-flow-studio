@@ -381,8 +381,14 @@ export async function registerSaasHubAdapterRoutes(
         .where(eq(appSettings.id, 1));
     }
 
-    // Save full state to sidecar
-    await stateService.save(state as unknown as Record<string, unknown>);
+    // Save full state to sidecar, preserving server-side-only keys
+    const existing = (await stateService.load()) ?? {};
+    await stateService.save({
+      ...state as unknown as Record<string, unknown>,
+      providerConfigs: existing.providerConfigs,
+      providerSummaries: existing.providerSummaries,
+      githubCopilotAuth: existing.githubCopilotAuth,
+    });
 
     reply.send({ result: "success", providers: providerRegistry.getAll() });
   });
@@ -711,6 +717,9 @@ export async function registerSaasHubAdapterRoutes(
     const { deviceCode } = request.body as { deviceCode: string };
     try {
       const result = await makeCopilotProvider().pollDeviceFlow(deviceCode);
+      if (result.status === "completed") {
+        await providerRegistry.updateOne("github_copilot", { configured: true, usable: true, reachable: true });
+      }
       reply.send(result);
     } catch (error) {
       reply.code(400).send({ error: { code: "COPILOT_DEVICE_POLL_FAILED", message: error instanceof Error ? error.message : "Device flow確認失敗" } });
@@ -766,18 +775,8 @@ export async function registerSaasHubAdapterRoutes(
 
   // ---- Codex CLI status ----
   app.get("/api/ai/providers/codex-cli/status", async (_request, reply) => {
-    reply.send({
-      status: {
-        configured: false,
-        reachable: false,
-        usable: false,
-        model: "gpt-5-codex",
-        authPath: "",
-        tokenKind: null,
-        lastTestStatus: "error",
-        lastTestError: "Codex CLIは現在非対応です",
-      },
-    });
+    const summary = providerRegistry.getOne("codex_cli");
+    reply.send({ status: summary });
   });
 
   // ---- DELETE /api/articles/:id ----
