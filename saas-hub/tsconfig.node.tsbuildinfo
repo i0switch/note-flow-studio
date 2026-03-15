@@ -1,0 +1,1 @@
+{"root":["./vite.config.ts","./server/aiproviders.ts","./server/appstatestore.ts","./server/contentgeneration.ts","./server/index.ts","./server/noteautomation.ts","./server/providersecretsstore.ts"],"version":"5.8.3"}

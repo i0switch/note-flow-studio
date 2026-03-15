@@ -1,0 +1,189 @@
+import { ExecutionTimeline } from "@/components/ExecutionTimeline";
+import { PageWrapper } from "@/components/PageWrapper";
+import { StatusBadge } from "@/components/StatusBadge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
+import { useAppData } from "@/context/AppDataContext";
+import { providerLabels } from "@/lib/app-data";
+import { ArrowLeft, Globe, Pencil, Save } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { toast } from "sonner";
+
+export default function ArticleDetailPage() {
+  const navigate = useNavigate();
+  const { id } = useParams();
+  const { state, isHydrating, publishArticle, saveDraft, updateArticle } = useAppData();
+  const article = state.articles.find((item) => item.id === id);
+  const [noteSubmitting, setNoteSubmitting] = useState<"draft" | "publish" | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    title: "",
+    freeContent: "",
+    paidGuidance: "",
+    paidContent: "",
+    body: ""
+  });
+
+  useEffect(() => {
+    if (!article) return;
+    setDraft({
+      title: article.title,
+      freeContent: article.freeContent,
+      paidGuidance: article.paidGuidance,
+      paidContent: article.paidContent,
+      body: article.body
+    });
+  }, [article]);
+
+  if (!article && isHydrating) {
+    return (
+      <PageWrapper title="記事を読み込み中" description="保存済みデータを確認している。少しだけ待って。">
+        <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+          他のブラウザで作成した記事も含めて確認中。
+        </div>
+      </PageWrapper>
+    );
+  }
+
+  if (!article) {
+    return (
+      <PageWrapper title="この記事はまだ表示できない" description="保存済みの記事一覧から開き直すと表示できることが多い。">
+        <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
+          このURLの記事データがまだ読み込まれていないか、すでに削除されている可能性がある。
+        </div>
+        <Button onClick={() => navigate("/articles")}>記事一覧へ戻る</Button>
+      </PageWrapper>
+    );
+  }
+
+  const handleSave = () => {
+    updateArticle(article.id, draft);
+    setIsEditing(false);
+    toast.success("記事内容を保存した");
+  };
+
+  const handleNoteAction = async (action: "draft" | "publish") => {
+    setNoteSubmitting(action);
+    try {
+      if (action === "draft") {
+        await saveDraft(article.id);
+        toast.success("note 下書き保存が完了した");
+        return;
+      }
+
+      await publishArticle(article.id);
+      toast.success("note 公開が完了した");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+    } finally {
+      setNoteSubmitting(null);
+    }
+  };
+
+  return (
+    <PageWrapper title="" description="">
+      <div className="space-y-3">
+        <Link to="/articles" className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground">
+          <ArrowLeft className="h-3.5 w-3.5" />
+          記事管理に戻る
+        </Link>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 space-y-2">
+            <h1 className="page-header leading-snug">{article.title}</h1>
+            <div className="flex items-center gap-2">
+              <StatusBadge status={article.status} />
+              <StatusBadge status={article.noteStatus} />
+            </div>
+            {(article.lastNoteMethod || article.lastError || article.noteUrl) && (
+              <div className="space-y-1 text-xs text-muted-foreground">
+                {article.providerId ? <p>生成 provider: {providerLabels[article.providerId]}</p> : null}
+                {article.lastNoteMethod ? <p>保存経路: {article.lastNoteMethod}</p> : null}
+                {article.noteUrl ? <p>note URL: {article.noteUrl}</p> : null}
+                {article.lastError ? <p className="text-destructive">直近エラー: {article.lastError}</p> : null}
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0">
+            <Button variant={isEditing ? "default" : "outline"} size="sm" className="gap-1.5" onClick={() => setIsEditing((value) => !value)}>
+              <Pencil className="h-3.5 w-3.5" />
+              {isEditing ? "編集中" : "編集"}
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleSave} disabled={noteSubmitting !== null}>
+              <Save className="h-3.5 w-3.5" />
+              保存
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleNoteAction("draft")} disabled={noteSubmitting !== null}>
+              <Save className="h-3.5 w-3.5" />
+              NOTE保存
+            </Button>
+            <Button size="sm" className="gap-1.5" onClick={() => void handleNoteAction("publish")} disabled={noteSubmitting !== null}>
+              <Globe className="h-3.5 w-3.5" />
+              NOTE公開
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <Tabs defaultValue="content">
+        <TabsList className="bg-muted/50">
+          <TabsTrigger value="content">本文</TabsTrigger>
+          <TabsTrigger value="media">素材</TabsTrigger>
+          <TabsTrigger value="references">参考資料</TabsTrigger>
+          <TabsTrigger value="history">実行履歴</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="content" className="mt-4 space-y-4">
+          <div className="space-y-2 rounded-lg border border-border bg-card p-5">
+            <span className="section-label">タイトル</span>
+            {isEditing ? <Textarea value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /> : <p className="text-base font-semibold">{article.title}</p>}
+          </div>
+          <div className="space-y-2 rounded-lg border border-border bg-card p-5">
+            <span className="section-label">無料部分</span>
+            {isEditing ? <Textarea rows={6} value={draft.freeContent} onChange={(event) => setDraft((current) => ({ ...current, freeContent: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.freeContent}</p>}
+          </div>
+          <div className="space-y-2 rounded-lg border border-primary/30 bg-card p-5">
+            <span className="section-label text-primary">有料導線</span>
+            {isEditing ? <Textarea rows={3} value={draft.paidGuidance} onChange={(event) => setDraft((current) => ({ ...current, paidGuidance: event.target.value }))} /> : <p className="text-sm leading-relaxed">{article.paidGuidance}</p>}
+          </div>
+          <div className="space-y-2 rounded-lg border border-border bg-card p-5">
+            <span className="section-label">有料部分</span>
+            {isEditing ? <Textarea rows={8} value={draft.paidContent} onChange={(event) => setDraft((current) => ({ ...current, paidContent: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.paidContent}</p>}
+          </div>
+          <div className="space-y-2 rounded-lg border border-border bg-card p-5">
+            <span className="section-label">本文</span>
+            {isEditing ? <Textarea rows={10} value={draft.body} onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.body}</p>}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="media" className="mt-4 space-y-4">
+          <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">
+            画像・グラフ生成機能は削除されました。
+          </div>
+        </TabsContent>
+
+        <TabsContent value="references" className="mt-4 space-y-3">
+          {article.references.length === 0 ? (
+            <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">参考資料はまだ紐づいていない。</div>
+          ) : (
+            article.references.map((reference, index) => (
+              <div key={`${reference.title}-${index}`} className="space-y-1 rounded-lg border border-border bg-card p-5">
+                <h3 className="text-sm font-semibold">{reference.title}</h3>
+                <p className="text-xs text-muted-foreground">{reference.summary}</p>
+                <a href={reference.link} className="text-xs text-primary hover:underline">リンクを開く</a>
+              </div>
+            ))
+          )}
+        </TabsContent>
+
+        <TabsContent value="history" className="mt-4">
+          <div className="rounded-lg border border-border bg-card p-5">
+            <span className="section-label mb-4 block">タイムライン</span>
+            <ExecutionTimeline items={article.timeline} />
+          </div>
+        </TabsContent>
+      </Tabs>
+    </PageWrapper>
+  );
+}

@@ -15,3 +15,4 @@ note-session-*.json
 note-storage-state.json
 apps/server/ms-playwright/
 release/
+.git_backup/
