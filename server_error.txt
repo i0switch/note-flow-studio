@@ -1,0 +1,16 @@
+X [ERROR] Cannot start service: Host version "0.27.3" does not match binary version "0.25.12"
+
+1 error
+
+node:internal/modules/run_main:123
+    triggerUncaughtException(
+    ^
+Error [TransformError]: The service was stopped
+    at C:\Users\i0swi\OneDrive\デスクトップ\記事自動生成\node_modules\tsx\node_modules\esbuild\lib\main.js:718:38
+    at responseCallbacks.<computed> (C:\Users\i0swi\OneDrive\デスクトップ\記事自動生成\node_modules\tsx\node_modules\esbuild\lib\main.js:603:9)
+    at Socket.afterClose (C:\Users\i0swi\OneDrive\デスクトップ\記事自動生成\node_modules\tsx\node_modules\esbuild\lib\main.js:594:28)
+    at Socket.emit (node:events:530:35)
+    at endReadableNT (node:internal/streams/readable:1698:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+
+Node.js v22.18.0

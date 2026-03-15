@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+.vite/
+apps/server/data/
+.env
+.env.local
+*.log
+*.db
+*.db-shm
+*.db-wal
+note-session-*.json
+note-storage-state.json
+apps/server/ms-playwright/
+release/

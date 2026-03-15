@@ -1,0 +1,37 @@
+{
+  "name": "note-local-draft-studio",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:server": "npm run dev --workspace @note-local/server",
+    "dev:web": "npm run dev --workspace @note-local/web",
+    "dev:saas": "npm-run-all --parallel dev:server dev:saas-front",
+    "dev:saas-front": "npm --prefix saas-hub run dev:web",
+    "start:api": "node scripts/start-api.mjs",
+    "start:release-check": "node scripts/start-release-check.mjs",
+    "build": "npm run build --workspace @note-local/shared && npm run build --workspace @note-local/server && npm run build --workspace @note-local/web",
+    "package:portable": "node scripts/package-portable.mjs",
+    "verify:portable": "node scripts/verify-portable.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm-run-all test:unit test:integration",
+    "test:unit": "npm run test:unit --workspace @note-local/server && npm run test:unit --workspace @note-local/web",
+    "test:integration": "npm run test:integration --workspace @note-local/server",
+    "test:e2e": "npm run build && playwright test",
+    "db:generate": "npm run db:generate --workspace @note-local/server",
+    "db:migrate": "npm run db:migrate --workspace @note-local/server"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0",
+    "esbuild": "^0.27.4",
+    "npm-run-all": "^4.1.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
+  }
+}

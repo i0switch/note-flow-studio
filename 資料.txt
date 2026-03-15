@@ -1,0 +1,299 @@
+1. 公開仕様で確認できる事実
+1-1. GitHub OAuth Device Flow は正式仕様
+
+GitHub の OAuth App は Device Flow をサポートしています。利用するには、OAuth App 側で Enable Device Flow を有効にする必要があります。Device Flow は POST /login/device/code で開始し、POST /login/oauth/access_token をポーリングして access token を取得します。
+
+1-2. Copilot CLI の既定認証も Device Flow
+
+GitHub Copilot CLI の対話型認証は、公式に OAuth Device Flow が既定です。したがって、AnimaWorks が headless な接続手段として Device Flow を採用すること自体は妥当です。
+
+1-3. GitHub token の prefix には意味がある
+
+GitHub の公式 docs では、gho_ は OAuth App の access token、ghu_ は GitHub App の user access token です。両者は同じ種類の token ではありません。
+
+1-4. GPT-5.4 は GitHub Copilot でロールアウト中
+
+GitHub は 2026-03-05 に、GPT-5.4 が GitHub Copilot で generally available と発表しています。対象は Copilot Pro / Pro+ / Business / Enterprise で、Business / Enterprise では管理者がポリシーで有効化する必要があります。
+
+1-5. ただし GitHub のモデル一覧 docs は更新遅延の可能性がある
+
+現在の GitHub Docs の「Supported AI models」では、GPT-5.3-Codex は GA として見えますが、同ページのスナップショットでは GPT-5.4 がまだ反映されていません。したがって、実装ではモデル名を固定せず、可変設定にするべきです。
+
+1-6. Copilot の利用可否はライセンス・ポリシーに依存する
+
+GitHub Copilot は、アカウントに有効ライセンスがあることに加え、組織や enterprise のポリシーで機能やモデルが許可されている必要があります。CLI 認証トラブルシュートでも、policy setting や subscription 不足による access denied が明記されています。
+
+2. このチャットで確定した実測
+
+以下は公開仕様ではなく、このチャット内の live 切り分けで確認された事実です。
+
+2-1. custom OAuth App は今回の正解ではなかった
+
+この会話の実測では、
+
+custom OAuth App 由来の gho_ token は /copilot_internal/user には到達
+
+しかし /copilot_internal/v2/token は 404
+
+built-in client 側の token は、成功形の request shape で /copilot_internal/v2/token が 200
+
+でした。
+
+したがって、今回の運用方針は custom client 優先ではなく built-in client 優先です。
+
+2-2. 本当の詰まりは OAuth ではなく LiteLLM 実行層
+
+この会話の実測では、OAuth 接続自体は復旧した一方で、実際のチャット実行は失敗しました。原因は、
+
+AnimaWorks は vault に GitHub / Copilot credential を保存していた
+
+しかし LiteLLM の github_copilot provider は vault を直接見ず、
+
+~/.config/litellm/github_copilot/tokens.json の cache を見ていた
+
+ためです。
+
+つまり、認証層と実行層の橋渡しが不足していたのが主因でした。
+
+2-3. cache bridge を入れると実行は通った
+
+この会話の live 作業では、
+
+vault 上の GitHub Copilot credential から LiteLLM cache を同期
+
+必要に応じて実行モデルを Copilot 側へ寄せる
+
+chat endpoint に実リクエストを送る
+
+ことで、実際に HTTP 200 の応答が返りました。
+したがって、現場で必要なのは OAuth 実装 + LiteLLM cache bridge です。
+
+3. 実装方針
+3-1. 認証方針
+
+AnimaWorks の GitHub Copilot 接続は、まず built-in client を既定にします。
+custom OAuth App client ID は残してもよいですが、役割は 診断用です。既定経路にはしません。
+
+実装上は status API で少なくとも次を返すべきです。
+
+connected
+
+github_token_present
+
+copilot_token_ready
+
+oauth_client_id
+
+configured_oauth_client_id
+
+oauth_client_id_source
+
+oauth_client_id_source は builtin / config の区別を出せるようにします。
+
+3-2. OAuth Device Flow
+
+必要な API は次です。
+
+POST /api/system/credentials/github-copilot/device/start
+
+POST /api/system/credentials/github-copilot/device/poll
+
+GET /api/system/credentials/github-copilot/status
+
+POST /api/system/credentials/github-copilot/disconnect
+
+device/start は built-in client を既定で使い、保存済み custom client ID がある場合のみ差し替えられる形にします。
+device/poll 成功時には GitHub token を保存し、その後 Copilot token exchange を試みます。Device Flow の開始と poll 自体は GitHub の正式仕様です。
+
+3-3. Copilot token exchange
+
+/copilot_internal/v2/token は GitHub の公開 API 仕様ではありません。
+そのため、ここは「公開仕様」ではなく「既存の成功実装を再現する」対象です。
+
+実装ルールは次です。
+
+ここを安定した公開 API とみなさない
+
+request shape を固定値と断言しない
+
+以前 live で成功した built-in client の exchange 形状を再現する
+
+失敗時は 403 / 404 / body を UI とログで観測できるようにする
+
+custom client は既定経路にしない
+
+要するに、ここは「仕様に従う」ではなく、成功した実測経路を壊さず再現するのが正です。
+
+3-4. LiteLLM bridge
+
+AnimaWorks 側の credential を保存するだけでは不十分です。
+LiteLLM 実行時に参照する cache を同期する必要があります。
+
+必要な処理は次です。
+
+connect 完了時に vault → LiteLLM cache を同期
+
+server 起動時に、既存 credential があれば cache を再生成
+
+disconnect 時に cache を削除
+
+refresh 後も cache を上書き更新
+
+対象 cache は、この会話の実測では次でした。
+
+~/.config/litellm/github_copilot/tokens.json
+
+3-5. モデル設定
+
+モデル名は固定しないでください。理由は、GitHub 側 docs の更新と rollout に差があるためです。
+推奨は次です。
+
+第1候補:
+
+github-copilot/gpt-5.4
+
+第2候補:
+
+github-copilot/gpt-5.3-codex
+
+第3候補:
+
+github-copilot/gpt-5.2-codex
+
+GitHub は GPT-5.4 の Copilot 展開を告知していますが、docs のモデル一覧にはまだ反映遅れが見えます。したがって、status / 設定 / anima ごとの status.json ではモデル名を上書き可能にするのが安全です。
+
+4. 必要な保存データ
+
+GitHub Copilot credential には、少なくとも次を保持します。
+
+github_token
+
+copilot_token
+
+copilot_token_expires_at
+
+oauth_client_id_source
+
+configured_oauth_client_id
+
+last_exchange_status
+
+last_exchange_error
+
+このうち last_exchange_status と last_exchange_error はデバッグ用です。
+公開画面には要約だけ出し、token 本文は出さないでください。
+
+5. AI に実装させるときの要点
+
+AI には、次の順で作業させるのがよいです。
+
+5-1. まず調査
+
+最初に確認するもの。
+
+github_copilot.py があるか
+
+config_routes.py に status / start / poll / disconnect があるか
+
+settings.js に GitHub Copilot 設定 UI があるか
+
+built-in client と custom client の扱い
+
+LiteLLM cache bridge があるか
+
+server startup 時の cache 再生成があるか
+
+anima ごとの model / credential 設定方法
+
+5-2. 次に最小修正
+
+修正対象の優先順位。
+
+github_copilot.py
+
+config_routes.py
+
+起動時同期処理
+
+settings.js
+
+anima の status.json
+
+5-3. 最後に smoke test
+
+確認は status だけで終わらせず、必ず chat まで通します。
+
+6. 受け入れ条件
+
+実装完了の判定条件は次です。
+
+6-1. status API
+
+次が true になること。
+
+connected
+
+github_token_present
+
+copilot_token_ready
+
+さらに、
+
+oauth_client_id_source == "builtin"
+
+が正常系であること。
+
+6-2. cache
+
+次のどちらかで確認できること。
+
+~/.config/litellm/github_copilot/tokens.json が生成される
+
+disconnect で削除される
+
+reconnect で再生成される
+
+6-3. 実チャット
+
+少なくとも 1 つの Anima で、
+
+primary model を github-copilot/gpt-5.4 か github-copilot/gpt-5.3-codex に設定
+
+credential を github-copilot に設定
+
+chat endpoint に 1 リクエスト送信
+
+HTTP 200
+
+応答本文あり
+
+が確認できること。
+
+7. 注意点
+7-1. GPT-5.4 は「使えるはず」ではなく「テナントで使えるか確認」が必要
+
+GitHub は GPT-5.4 の Copilot 展開を公表していますが、Business / Enterprise では管理者ポリシー依存です。したがって、AnimaWorks 実装は GPT-5.4 が未許可でも壊れない設計にしてください。
+
+7-2. /copilot_internal/v2/token は undocumented
+
+ここは公開 REST API と同列に扱わないでください。
+過去の live 成功形を踏襲しつつ、失敗時の診断情報を残す実装が必要です。
+
+7-3. custom OAuth App は既定経路にしない
+
+GitHub の公開仕様として OAuth App の Device Flow は正規ですが、この会話の実測では custom OAuth App が正解ではありませんでした。built-in 優先で実装するのが安全です。
+
+最終結論
+
+AI に理解させるべき核心はこれです。
+
+AnimaWorks で GitHub Copilot を使う実装は、単なる OAuth 実装では足りません。
+必要なのは次の3点です。
+
+built-in client 優先の GitHub OAuth Device Flow
+
+取得した credential を AnimaWorks vault に保存
+
+その credential を LiteLLM の GitHub Copilot cache に同期する bridge
+
+さらに、モデル名は gpt-5.4 を第一候補、gpt-5.3-codex を安全な代替として扱うのが実装上もっとも安定です。GitHub 側の rollout と docs 更新には差があるためです。

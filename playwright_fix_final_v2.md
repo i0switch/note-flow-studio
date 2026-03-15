@@ -1,0 +1,82 @@
+- generic [ref=e7]:
+  - generic [ref=e8]:
+    - paragraph [ref=e9]: Portable localhost
+    - heading "購入者PCでそのまま動かす配布版セットアップ" [level=1] [ref=e10]
+    - paragraph [ref=e11]: 配布方式は Windows 向け portable localhost アプリ。初回だけ APIキー、noteログイン情報、 Playwright Chromium 導入を済ませれば、その後はローカルアプリとして回せる。
+  - generic [ref=e12]:
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - paragraph [ref=e17]: Step 1
+          - heading "初回設定" [level=2] [ref=e18]
+        - generic [ref=e19]: 未設定
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - generic [ref=e22]: Gemini API Key
+          - textbox "Gemini API Key" [ref=e23]
+        - generic [ref=e24]:
+          - generic [ref=e25]: Gemini Model
+          - textbox "Gemini Model" [ref=e26]: gemini-2.0-flash
+        - generic [ref=e27]:
+          - generic [ref=e28]: note ID
+          - textbox "note ID" [ref=e29]
+        - generic [ref=e30]:
+          - generic [ref=e31]: note Password
+          - textbox "note Password" [ref=e32]
+        - generic [ref=e33]:
+          - generic [ref=e34]: PinchTab URL
+          - textbox "PinchTab URL" [ref=e35]: http://localhost:9867
+        - generic [ref=e36]:
+          - generic [ref=e37]: PinchTab Profile
+          - textbox "PinchTab Profile" [ref=e38]: note-live
+        - generic [ref=e39]:
+          - generic [ref=e40]: PinchTab Port
+          - spinbutton "PinchTab Port" [ref=e41]: "9870"
+        - generic [ref=e42]:
+          - generic [ref=e43]: localhost Port
+          - spinbutton "localhost Port" [ref=e44]: "3001"
+      - generic [ref=e46]:
+        - checkbox "Playwrightをヘッドレスで動かす" [ref=e47]
+        - text: Playwrightをヘッドレスで動かす
+      - generic [ref=e48]:
+        - button "設定を保存" [ref=e49] [cursor=pointer]
+        - button "Chromiumを導入" [ref=e50] [cursor=pointer]
+    - generic [ref=e51]:
+      - generic [ref=e52]:
+        - paragraph [ref=e53]: Step 2
+        - heading "依存チェック" [level=2] [ref=e54]
+        - paragraph [ref=e55]: Node は配布版に同梱する。PinchTab は任意。Playwright 単体でも note 保存できる。
+        - generic [ref=e56]:
+          - generic [ref=e57]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: node
+              - generic [ref=e60]: ok
+            - paragraph [ref=e61]: Node v22.18.0
+          - generic [ref=e62]:
+            - generic [ref=e63]:
+              - generic [ref=e64]: playwright-package
+              - generic [ref=e65]: ok
+            - paragraph [ref=e66]: Playwright パッケージ導入済み
+          - generic [ref=e67]:
+            - generic [ref=e68]:
+              - generic [ref=e69]: playwright-browser
+              - generic [ref=e70]: ok
+            - paragraph [ref=e71]: Chromium 起動可能
+          - generic [ref=e72]:
+            - generic [ref=e73]:
+              - generic [ref=e74]: note-session
+              - generic [ref=e75]: warn
+            - paragraph [ref=e76]: note セッション未保存。初回ログイン後に自動保存される
+          - generic [ref=e77]:
+            - generic [ref=e78]:
+              - generic [ref=e79]: pinchtab
+              - generic [ref=e80]: ok
+            - paragraph [ref=e81]: PinchTab 接続成功
+      - generic [ref=e82]:
+        - paragraph [ref=e83]: Step 3
+        - heading "配布前チェック" [level=2] [ref=e84]
+        - list [ref=e85]:
+          - listitem [ref=e86]: "配布方式: Windows 向け portable localhost アプリ"
+          - listitem [ref=e87]: "設定ファイル: C:\\Users\\i0swi\\OneDrive\\デスクトップ\\記事自動生成\\apps\\server\\.env"
+          - listitem [ref=e88]: "アプリデータ保存先: C:\\Users\\i0swi\\OneDrive\\デスクトップ\\記事自動生成\\apps\\server\\apps\\server\\data"
+          - listitem [ref=e89]: note セッションは初回ログイン後に自動保存
