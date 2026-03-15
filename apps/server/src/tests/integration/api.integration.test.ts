@@ -20,7 +20,12 @@ describe("API integration", () => {
     env.MOCK_PINCHTAB_RESULT = "success";
     env.ENABLE_REAL_NOTE_AUTOMATION = false;
     tmpStateFile = path.join(os.tmpdir(), `note-local-state-${Date.now()}.json`);
-    app = await buildApp({ db: createDatabase(":memory:"), stateFilePath: tmpStateFile });
+    app = await buildApp({
+      db: createDatabase(":memory:"),
+      stateFilePath: tmpStateFile,
+      disableSsrfCheck: true,
+      allowedFileDir: os.tmpdir(),
+    });
   });
 
   afterEach(async () => {

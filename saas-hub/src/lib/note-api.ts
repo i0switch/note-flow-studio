@@ -68,10 +68,11 @@ const readErrorMessage = async (response: Response) => {
 };
 
 const requestJson = async <T>(input: string, init?: RequestInit): Promise<T> => {
+  const hasBody = init?.body != null;
   const response = await fetch(input, {
     ...init,
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(init?.headers ?? {}),
     },
   });

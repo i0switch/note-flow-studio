@@ -58,6 +58,10 @@ type AppOptions = {
   db?: AppDatabase;
   aiProvider?: AiProvider;
   stateFilePath?: string;
+  /** テスト専用: SSRFチェックを無効化 */
+  disableSsrfCheck?: boolean;
+  /** テスト専用: ファイルソース許可ディレクトリを上書き */
+  allowedFileDir?: string;
 };
 
 const summarize = (text: string) =>
@@ -80,12 +84,47 @@ const htmlToText = (html: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-const extractReferenceText = async (input: ReferenceMaterialImportInput) => {
+/** Block loopback / link-local / private IP ranges to prevent SSRF */
+const isBlockedUrl = (rawUrl: string): boolean => {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return true; // unparseable → block
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return true;
+  const h = url.hostname.toLowerCase().replace(/^\[|]$/g, ""); // strip IPv6 brackets
+  // localhost / loopback
+  if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
+  if (/^127\./.test(h)) return true;
+  // link-local
+  if (/^169\.254\./.test(h)) return true;
+  // private ranges
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
+  // IPv6 private
+  if (/^f[cd]/i.test(h) || /^fe80/i.test(h)) return true;
+  return false;
+};
+
+const extractReferenceText = async (
+  input: ReferenceMaterialImportInput,
+  opts?: { disableSsrfCheck?: boolean; allowedFileDir?: string },
+) => {
   if (input.sourceType === "text") return input.sourceValue;
   if (input.sourceType === "file") {
-    return fs.readFile(input.sourceValue, "utf8");
+    const allowedDir = path.resolve(opts?.allowedFileDir ?? path.resolve(process.cwd(), env.APP_DATA_DIR));
+    const target = path.resolve(input.sourceValue);
+    if (!target.startsWith(allowedDir + path.sep) && target !== allowedDir) {
+      throw new Error("REFERENCE_FILE_PATH_NOT_ALLOWED");
+    }
+    return fs.readFile(target, "utf8");
   }
 
+  if (!opts?.disableSsrfCheck && isBlockedUrl(input.sourceValue)) {
+    throw new Error("REFERENCE_URL_NOT_ALLOWED");
+  }
   const response = await fetch(input.sourceValue);
   if (!response.ok) {
     throw new Error("REFERENCE_FETCH_FAILED");
@@ -117,7 +156,16 @@ export const buildApp = async (options: AppOptions = {}) => {
   const generationService = new GenerationService(db, aiProvider);
 
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: true });
+  await app.register(cors, {
+    origin: (origin, cb) => {
+      // Allow requests with no origin (same-origin, curl, Playwright) or localhost only
+      if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        cb(null, true);
+      } else {
+        cb(new Error("CORS_NOT_ALLOWED"), false);
+      }
+    }
+  });
 
   if (env.SERVE_WEB_FROM_SERVER) {
     const webDistPath = resolveWebDistPath();
@@ -203,7 +251,7 @@ export const buildApp = async (options: AppOptions = {}) => {
     return {
       localhostPort: settings.localhostPort,
       defaultAiProvider: settings.defaultAiProvider,
-      geminiApiKey: env.GEMINI_API_KEY,
+      hasGeminiApiKey: Boolean(env.GEMINI_API_KEY),
       geminiModel: settings.geminiModel,
       pinchtabBaseUrl: settings.pinchtabBaseUrl,
       debugMode: settings.debugMode === 1,
@@ -242,7 +290,17 @@ export const buildApp = async (options: AppOptions = {}) => {
       });
     }
 
-    reply.send(body);
+    reply.send({
+      localhostPort: body.localhostPort,
+      defaultAiProvider: body.defaultAiProvider,
+      hasGeminiApiKey: Boolean(body.geminiApiKey ?? env.GEMINI_API_KEY),
+      geminiModel: body.geminiModel,
+      pinchtabBaseUrl: body.pinchtabBaseUrl,
+      debugMode: body.debugMode,
+      logRetentionDays: body.logRetentionDays,
+      enableGenreAutoDetection: body.enableGenreAutoDetection,
+      defaultTimeoutSec: body.defaultTimeoutSec,
+    });
   });
 
   app.get("/api/note-accounts", async () => db.select().from(noteAccounts));
@@ -311,7 +369,10 @@ export const buildApp = async (options: AppOptions = {}) => {
 
   app.post("/api/reference-materials/import", async (request, reply) => {
     const body = referenceMaterialImportSchema.parse(request.body) as ReferenceMaterialImportInput;
-    const extractedText = await extractReferenceText(body);
+    const extractedText = await extractReferenceText(body, {
+      disableSsrfCheck: options.disableSsrfCheck,
+      allowedFileDir: options.allowedFileDir,
+    });
     const [material] = await db
       .insert(referenceMaterials)
       .values({
@@ -391,6 +452,10 @@ export const buildApp = async (options: AppOptions = {}) => {
       return;
     }
     const account = await db.select().from(noteAccounts).where(eq(noteAccounts.displayName, detail.noteAccountName)).limit(1);
+    if (account.length === 0) {
+      reply.code(400).send({ error: { code: "ACCOUNT_NOT_FOUND", message: "noteアカウントが見つかりません" } });
+      return;
+    }
     const result = await noteSaveService.saveJob(id, {
       forceMethod: null,
       noteAccountId: account[0].id,
