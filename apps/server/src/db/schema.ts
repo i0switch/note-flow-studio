@@ -83,6 +83,7 @@ export const generationJobs = sqliteTable("generation_jobs", {
   salesMode: text("sales_mode").notNull(),
   desiredPriceYen: integer("desired_price_yen"),
   additionalInstruction: text("additional_instruction").notNull(),
+  providerName: text("provider_name").notNull().default(""),
   status: text("status").notNull(),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull()

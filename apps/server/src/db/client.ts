@@ -8,6 +8,11 @@ export const createDatabase = (dbPath = resolveDataPath("app.db")) => {
   fs.mkdirSync(resolveDataPath(), { recursive: true });
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
+  try {
+    sqlite.exec(`ALTER TABLE generation_jobs ADD COLUMN provider_name TEXT NOT NULL DEFAULT ''`);
+  } catch {
+    // カラムが既存の場合はスルー
+  }
   return drizzle(sqlite, { schema });
 };
 

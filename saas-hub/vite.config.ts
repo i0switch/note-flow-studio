@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react-swc";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
 
-const apiPort = Number(process.env.SAAS_HUB_API_PORT ?? 3001);
+const apiPort = Number(process.env.SAAS_HUB_API_PORT ?? 4001);
 const apiTarget = process.env.SAAS_HUB_API_TARGET ?? `http://127.0.0.1:${apiPort}`;
 
 // https://vitejs.dev/config/

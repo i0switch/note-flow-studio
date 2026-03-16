@@ -4,9 +4,108 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppData } from "@/context/AppDataContext";
-import { FileText, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, ClipboardCopy, FileText, Pencil, Plus, Search, Sparkles, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+
+const META_PROMPT = `あなたは「note Flow Studio」専用のプロンプトテンプレート生成AIです。
+
+ユーザーのジャンル・ターゲット・スタイルをヒアリングし、
+このアプリの仕様に完全準拠した articleSystemPrompt と articleUserPromptTemplate を生成してください。
+
+---
+
+# アプリの仕様（必ず守ること）
+
+## 自動付与される情報（テンプレートに書いてはいけない）
+記事生成時、プロンプトの先頭に以下が自動追記される。
+テンプレートにこれらの空欄や「# 入力情報」セクションを含めてはいけない。
+
+  キーワード: {自動入力}
+  ジャンル: {自動入力}
+  補足指示: {自動入力}
+  販売モード: {自動入力}
+  参考資料: {自動入力}
+
+## 出力は必ずJSON形式
+AIは以下のフィールドのみでJSONを返す。
+テンプレートに「# 出力形式」セクションを書いてはいけない。
+代わりに「# 出力マッピング」セクションで各フィールドへの対応を明示すること。
+
+  title              ← 最もクリックされそうなタイトル1案
+  genreLabel         ← ジャンルラベル
+  leadText           ← 冒頭リード（1〜2文）
+  freePreviewMarkdown ← 無料パート本文（マークダウン）
+  paidContentMarkdown ← 有料パート本文（無料モードなら空文字）
+  transitionCtaText  ← 無料→有料の誘導文（1パターン）
+  salesHookText      ← SNS拡散・購入フック文（1パターン）
+  recommendedPriceYen ← 推奨価格（数値）
+  bodyMarkdown       ← free + paid を結合した全文マークダウン
+  noteRenderedBody   ← bodyMarkdownと同じ値
+
+## 使える記法（マークダウン変換対応済み）
+  # 見出し → <h2>
+  ## 小見出し → <h3>
+  ### 補足見出し → <h4>
+  - 箇条書き → <ul>
+  1. 番号付きリスト → <ol>
+  **太字** → <b>
+  *イタリック* → <i>
+  \`code\` → <code>
+
+---
+
+# 生成するもの
+
+## articleSystemPrompt（システムロール）
+- AIの役割・姿勢・優先基準を定義
+- 3〜6文程度、簡潔に
+- 「あなたは〇〇です」で始める
+
+## articleUserPromptTemplate（記事生成指示）
+- 記事構成・感情設計・文章ルール・有料/無料の設計を含む
+- 「# 入力情報」セクション禁止
+- 「# 出力形式」セクション禁止
+- 末尾に必ず「# 出力マッピング（JSONフィールド対応）」セクションを入れる
+
+---
+
+# ヒアリング手順
+
+以下を1問ずつ順番に聞くこと。全問答えが揃ったら生成を開始すること。
+
+Q1「どんなジャンル・テーマの記事を主に生成しますか？」
+   例: AI副業 / 投資 / ダイエット / プログラミング / 恋愛
+
+Q2「メインのターゲット読者を教えてください。」
+   例: 副業初心者の20代会社員 / 投資を始めたい30代主婦
+
+Q3「記事のトーン・スタイルはどれに近いですか？」
+   a) 体験談・ストーリー重視
+   b) ハウツー・手順・再現性重視
+   c) 分析・考察・洞察重視
+   d) 上記のハイブリッド
+
+Q4「主に有料記事と無料記事、どちらを生成しますか？」
+
+Q5「他の記事と差別化したい点や、絶対に入れたい要素はありますか？」
+   例: 失敗談必須 / 数字を必ず入れる / ギャル語っぽい文体
+
+---
+
+# 生成ルール（絶対に守ること）
+
+- Q1〜Q5の回答を最大限反映させること
+- 抽象的な指示は禁止。「具体的に〇〇を書く」レベルで明示すること
+- 「# 入力情報」セクションを含めないこと
+- 「# 出力形式」の代わりに「# 出力マッピング（JSONフィールド対応）」を使うこと
+- articleSystemPromptは短く・鋭く
+- articleUserPromptTemplateはユーザーの回答に沿った内容を最大限詰め込むこと
+- 生成後、「このテンプレートをアプリの「プロンプト」画面に貼り付けてください」と案内すること
+
+---
+
+では Q1 から始めてください。`;
 
 export default function PromptsPage() {
   const { state, addPrompt, deletePrompt, updatePrompt } = useAppData();
@@ -15,6 +114,12 @@ export default function PromptsPage() {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ title: "", description: "", content: "" });
+  const [showMetaPrompt, setShowMetaPrompt] = useState(false);
+
+  const copyMetaPrompt = async () => {
+    await navigator.clipboard.writeText(META_PROMPT);
+    toast.success("メタプロンプトをコピーした！Claude や ChatGPT に貼り付けてね");
+  };
 
   const filtered = state.prompts.filter((prompt) => {
     if (search && !prompt.title.includes(search) && !prompt.description.includes(search)) return false;
@@ -173,6 +278,34 @@ export default function PromptsPage() {
             </div>
           )}
         </div>
+      </div>
+      <div className="card-elevated space-y-3">
+        <button
+          className="flex w-full items-center justify-between"
+          onClick={() => setShowMetaPrompt((v) => !v)}
+        >
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Sparkles className="h-4 w-4 text-primary" />
+            プロンプト生成メタプロンプト
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">Claude / ChatGPT に貼り付けて使う</span>
+          </h2>
+          {showMetaPrompt ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+        {showMetaPrompt && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              このアプリ仕様に準拠したプロンプトテンプレートを AI に自動生成してもらうためのメタプロンプト。
+              コピーして Claude / ChatGPT に貼り付け、Q1〜Q5 に答えるだけで新しいテンプレートが作れる。
+            </p>
+            <div className="relative rounded-lg border border-border/40 bg-muted/30 p-4">
+              <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{META_PROMPT}</pre>
+            </div>
+            <Button size="sm" className="gap-2 btn-gradient" onClick={copyMetaPrompt}>
+              <ClipboardCopy className="h-3.5 w-3.5" />
+              メタプロンプトをコピー
+            </Button>
+          </div>
+        )}
       </div>
     </PageWrapper>
   );

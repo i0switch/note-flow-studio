@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppData } from "@/context/AppDataContext";
 import { providerLabels } from "@/lib/app-data";
-import { ArrowLeft, Globe, Pencil, Save } from "lucide-react";
+import { ArrowLeft, Globe, Pencil, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -14,9 +14,10 @@ import { toast } from "sonner";
 export default function ArticleDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
-  const { state, isHydrating, publishArticle, saveDraft, updateArticle } = useAppData();
+  const { state, isHydrating, publishArticle, saveDraft, updateArticle, deleteArticle } = useAppData();
   const article = state.articles.find((item) => item.id === id);
   const [noteSubmitting, setNoteSubmitting] = useState<"draft" | "publish" | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState({
     title: "",
@@ -62,6 +63,19 @@ export default function ArticleDetailPage() {
     updateArticle(article.id, draft);
     setIsEditing(false);
     toast.success("記事内容を保存した");
+  };
+
+  const handleDelete = async () => {
+    if (!confirm("この記事を削除する？元に戻せないよ")) return;
+    setIsDeleting(true);
+    try {
+      await deleteArticle(article.id);
+      toast.success("記事を削除した");
+      navigate("/articles");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "削除に失敗した");
+      setIsDeleting(false);
+    }
   };
 
   const handleNoteAction = async (action: "draft" | "publish") => {
@@ -110,17 +124,21 @@ export default function ArticleDetailPage() {
               <Pencil className="h-3.5 w-3.5" />
               {isEditing ? "編集中" : "編集"}
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleSave} disabled={noteSubmitting !== null}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleSave} disabled={noteSubmitting !== null || isDeleting}>
               <Save className="h-3.5 w-3.5" />
               保存
             </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleNoteAction("draft")} disabled={noteSubmitting !== null}>
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleNoteAction("draft")} disabled={noteSubmitting !== null || isDeleting}>
               <Save className="h-3.5 w-3.5" />
               NOTE保存
             </Button>
-            <Button size="sm" className="gap-1.5" onClick={() => void handleNoteAction("publish")} disabled={noteSubmitting !== null}>
+            <Button size="sm" className="gap-1.5" onClick={() => void handleNoteAction("publish")} disabled={noteSubmitting !== null || isDeleting}>
               <Globe className="h-3.5 w-3.5" />
               NOTE公開
+            </Button>
+            <Button variant="destructive" size="sm" className="gap-1.5" onClick={() => void handleDelete()} disabled={noteSubmitting !== null || isDeleting}>
+              <Trash2 className="h-3.5 w-3.5" />
+              削除
             </Button>
           </div>
         </div>
@@ -150,10 +168,6 @@ export default function ArticleDetailPage() {
           <div className="space-y-2 rounded-lg border border-border bg-card p-5">
             <span className="section-label">有料部分</span>
             {isEditing ? <Textarea rows={8} value={draft.paidContent} onChange={(event) => setDraft((current) => ({ ...current, paidContent: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.paidContent}</p>}
-          </div>
-          <div className="space-y-2 rounded-lg border border-border bg-card p-5">
-            <span className="section-label">本文</span>
-            {isEditing ? <Textarea rows={10} value={draft.body} onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.body}</p>}
           </div>
         </TabsContent>
 

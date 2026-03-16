@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   sales_mode TEXT NOT NULL,
   desired_price_yen INTEGER,
   additional_instruction TEXT NOT NULL,
+  provider_name TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

@@ -153,6 +153,148 @@ describe("NoteSaveService", () => {
     expect(result.methodUsed).toBe("playwright");
   });
 
+  it("forceMethod 指定時は他アダプターをスキップして指定経路だけ使う", async () => {
+    const db = createDatabase(":memory:");
+    applyMigrations(db);
+    await seedDatabase(db);
+    const [account] = await db.select().from(noteAccounts).limit(1);
+    const [job] = await db
+      .insert(generationJobs)
+      .values({
+        keyword: "強制経路",
+        noteAccountId: account.id,
+        promptTemplateId: 1,
+        targetGenre: "business",
+        monetizationEnabled: 0,
+        salesMode: "normal",
+        desiredPriceYen: null,
+        additionalInstruction: "",
+        status: "succeeded",
+        createdAt: now(),
+        updatedAt: now()
+      })
+      .returning();
+    await db.insert(generatedArticles).values({
+      generationJobId: job.id,
+      title: "強制記事",
+      genreLabel: "business",
+      leadText: "lead",
+      freePreviewMarkdown: "free",
+      paidContentMarkdown: "",
+      transitionCtaText: "",
+      salesHookText: "",
+      recommendedPriceYen: null,
+      bodyMarkdown: "body",
+      noteRenderedBody: "body",
+      status: "generated",
+      createdAt: now(),
+      updatedAt: now()
+    });
+
+    let apiCalled = false;
+    const service = new NoteSaveService(db, [
+      {
+        method: "unofficial_api",
+        async save() {
+          apiCalled = true;
+          return { method: "unofficial_api", draftUrl: "https://note.com/api-draft", saleSettingStatus: "not_required" };
+        },
+        async verify() { return { status: "ok", detail: "ok" }; }
+      },
+      {
+        method: "playwright",
+        async save() {
+          return { method: "playwright", draftUrl: "https://note.com/playwright-draft", saleSettingStatus: "not_required" };
+        },
+        async verify() { return { status: "ok", detail: "ok" }; }
+      }
+    ]);
+
+    const result = await service.saveJob(job.id, {
+      forceMethod: "playwright",
+      noteAccountId: account.id,
+      applySaleSettings: false
+    });
+
+    expect(result.methodUsed).toBe("playwright");
+    expect(apiCalled).toBe(false); // unofficial_api はスキップされるべき
+  });
+
+  it("ARTICLE_NOT_READY: 記事が未生成のジョブへの保存は例外を投げる", async () => {
+    const db = createDatabase(":memory:");
+    applyMigrations(db);
+    await seedDatabase(db);
+    const [account] = await db.select().from(noteAccounts).limit(1);
+    const [job] = await db
+      .insert(generationJobs)
+      .values({
+        keyword: "未生成",
+        noteAccountId: account.id,
+        promptTemplateId: 1,
+        targetGenre: "business",
+        monetizationEnabled: 0,
+        salesMode: "normal",
+        desiredPriceYen: null,
+        additionalInstruction: "",
+        status: "running",
+        createdAt: now(),
+        updatedAt: now()
+      })
+      .returning();
+    // generatedArticles には何も挿入しない
+
+    const service = new NoteSaveService(db, [
+      {
+        method: "playwright",
+        async save() {
+          return { method: "playwright", draftUrl: "https://note.com/test", saleSettingStatus: "not_required" };
+        },
+        async verify() { return { status: "ok", detail: "ok" }; }
+      }
+    ]);
+
+    await expect(
+      service.saveJob(job.id, {
+        forceMethod: null,
+        noteAccountId: account.id,
+        applySaleSettings: false
+      })
+    ).rejects.toThrow("ARTICLE_NOT_READY");
+  });
+
+  it("verifyAdapters で各アダプターの検証結果を名前付きで返す", async () => {
+    const db = createDatabase(":memory:");
+    applyMigrations(db);
+    await seedDatabase(db);
+
+    const service = new NoteSaveService(db, [
+      {
+        method: "unofficial_api",
+        async save() {
+          return { method: "unofficial_api", draftUrl: "", saleSettingStatus: "not_required" };
+        },
+        async verify() { return { status: "ok", detail: "API接続OK" }; }
+      },
+      {
+        method: "playwright",
+        async save() {
+          return { method: "playwright", draftUrl: "", saleSettingStatus: "not_required" };
+        },
+        async verify() { return { status: "error", detail: "ブラウザ未起動" }; }
+      }
+    ]);
+
+    const results = await service.verifyAdapters();
+
+    expect(results).toHaveLength(2);
+    const apiResult = results.find((r) => r.name === "unofficial_api");
+    const pwResult = results.find((r) => r.name === "playwright");
+    expect(apiResult?.status).toBe("ok");
+    expect(apiResult?.detail).toBe("API接続OK");
+    expect(pwResult?.status).toBe("error");
+    expect(pwResult?.detail).toBe("ブラウザ未起動");
+  });
+
   it("全経路失敗時は例外を返す", async () => {
     const db = createDatabase(":memory:");
     applyMigrations(db);

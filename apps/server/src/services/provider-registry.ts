@@ -233,7 +233,7 @@ export class ProviderRegistry {
 
     switch (id) {
       case "gemini":
-        return new GeminiProvider({ apiKey: env.GEMINI_API_KEY, model: env.GEMINI_MODEL, mockMode: false });
+        return new GeminiProvider({ getApiKey: () => env.GEMINI_API_KEY, model: env.GEMINI_MODEL, mockMode: false });
       case "claude":
         return new ClaudeProvider({ apiKey, model });
       case "openai":

@@ -118,28 +118,100 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
-const normalizeBlocks = (value: string) =>
-  value
-    .replace(/\r/g, "")
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean);
+const normalizeBlocks = (value: string): string[] => {
+  const lines = value.replace(/\r/g, "").split("\n");
+  const blocks: string[] = [];
+  let cur: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      cur.push(line);
+    } else if (!inFence && /^-{3,}$/.test(line.trim())) {
+      // --- はセパレーター記法。ブロックを区切るだけでコンテンツには含めない
+      if (cur.length > 0) {
+        blocks.push(cur.join("\n").trim());
+        cur = [];
+      }
+    } else if (!inFence && line.trim() === "") {
+      if (cur.length > 0) {
+        blocks.push(cur.join("\n").trim());
+        cur = [];
+      }
+    } else {
+      cur.push(line);
+    }
+  }
+  if (cur.length > 0) blocks.push(cur.join("\n").trim());
+  return blocks.filter(Boolean);
+};
 
-const buildParagraphHtml = (block: string, seed: string) => {
+const parseInlineMarkdown = (text: string): string =>
+  text
+    .replace(/\*\*(.+?)\*\*|__(.+?)__/g, (_, a: string, b: string) => `<b>${a ?? b}</b>`)
+    .replace(/\*(.+?)\*|_(.+?)_/g, (_, a: string, b: string) => `<i>${a ?? b}</i>`)
+    .replace(/`(.+?)`/g, (_, code: string) => `<code>${code}</code>`);
+
+const buildBlockHtml = (block: string, seed: string) => {
   const id = `${seed}-${crypto.randomUUID().slice(0, 8)}`;
   const lines = block
     .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return { id, html: "" };
 
-  return {
-    id,
-    html: `<p name="${id}" id="${id}">${lines.map(escapeHtml).join("<br>")}</p>`
-  };
+  const firstLine = lines[0];
+
+  if (firstLine.startsWith("```")) {
+    const lang = escapeHtml(firstLine.slice(3).trim());
+    const lastLine = lines[lines.length - 1];
+    const codeLines = lastLine === "```" ? lines.slice(1, -1) : lines.slice(1);
+    const code = escapeHtml(codeLines.join("\n"));
+    const langAttr = lang ? ` class="language-${lang}"` : "";
+    return { id, html: `<pre name="${id}" id="${id}"><code${langAttr}>${code}</code></pre>` };
+  }
+
+  const h3 = firstLine.match(/^### (.+)$/);
+  if (h3) return { id, html: `<h4 name="${id}" id="${id}">${parseInlineMarkdown(escapeHtml(h3[1]))}</h4>` };
+
+  const h2 = firstLine.match(/^## (.+)$/);
+  if (h2) return { id, html: `<h3 name="${id}" id="${id}">${parseInlineMarkdown(escapeHtml(h2[1]))}</h3>` };
+
+  const h1 = firstLine.match(/^# (.+)$/);
+  if (h1) return { id, html: `<h2 name="${id}" id="${id}">${parseInlineMarkdown(escapeHtml(h1[1]))}</h2>` };
+
+  type Run = { type: "ul" | "ol" | "p"; lines: string[] };
+  const runs: Run[] = [];
+  for (const line of lines) {
+    const last = runs[runs.length - 1];
+    const type: Run["type"] = /^[-*] /.test(line) ? "ul" : /^\d+\. /.test(line) ? "ol" : "p";
+    if (last && last.type === type) {
+      last.lines.push(line);
+    } else {
+      runs.push({ type, lines: [line] });
+    }
+  }
+  const parts = runs.map((run, idx) => {
+    const attrs = idx === 0 ? ` name="${id}" id="${id}"` : "";
+    if (run.type === "ul") {
+      const items = run.lines
+        .map((l) => `<li>${parseInlineMarkdown(escapeHtml(l.replace(/^[-*] /, "")))}</li>`)
+        .join("");
+      return `<ul${attrs}>${items}</ul>`;
+    }
+    if (run.type === "ol") {
+      const items = run.lines
+        .map((l) => `<li>${parseInlineMarkdown(escapeHtml(l.replace(/^\d+\. /, "")))}</li>`)
+        .join("");
+      return `<ol${attrs}>${items}</ol>`;
+    }
+    return `<p${attrs}>${run.lines.map((l) => parseInlineMarkdown(escapeHtml(l))).join("<br>")}</p>`;
+  });
+  return { id, html: parts.join("") };
 };
 
 const buildParagraphs = (value: string, seed: string) =>
-  normalizeBlocks(value).map((block) => buildParagraphHtml(block, seed));
+  normalizeBlocks(value).map((block) => buildBlockHtml(block, seed));
 
 export const buildStructuredNoteContent = (context: SaveContext): StructuredNoteContent => {
   const saleSettingRequested =
@@ -160,10 +232,15 @@ export const buildStructuredNoteContent = (context: SaveContext): StructuredNote
     };
   }
 
-  const freeParagraphs = buildParagraphs(
+  // 無料パート末尾に CTA テキストを追加（セパレーター前に置くため）
+  const freeMarkdown = [
     context.freePreviewMarkdown || context.noteBody,
-    `job-${context.jobId}-free`
-  );
+    context.transitionCtaText?.trim() || null
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const freeParagraphs = buildParagraphs(freeMarkdown, `job-${context.jobId}-free`);
   const paidParagraphs = buildParagraphs(context.paidContentMarkdown, `job-${context.jobId}-paid`);
 
   if (freeParagraphs.length === 0 || paidParagraphs.length === 0) {

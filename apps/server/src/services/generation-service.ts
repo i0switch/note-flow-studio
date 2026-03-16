@@ -18,13 +18,14 @@ const now = () => new Date().toISOString();
 export class GenerationService {
   private readonly queue: number[] = [];
   private processing = false;
+  private readonly providerOverrides = new Map<number, AiProvider>();
 
   constructor(
     private readonly db: AppDatabase,
     private readonly aiProvider: AiProvider
   ) {}
 
-  async createJob(input: GenerationJobCreateInput) {
+  async createJob(input: GenerationJobCreateInput & { aiProviderOverride?: AiProvider }) {
     const [inserted] = await this.db
       .insert(generationJobs)
       .values({
@@ -51,6 +52,9 @@ export class GenerationService {
       });
     }
 
+    if (input.aiProviderOverride) {
+      this.providerOverrides.set(inserted.id, input.aiProviderOverride);
+    }
     await this.log(inserted.id, "info", "article", "記事生成ジョブを受付");
     this.enqueue(inserted.id);
     return inserted;
@@ -106,14 +110,18 @@ export class GenerationService {
       ? await this.db.select().from(referenceMaterials).where(inArray(referenceMaterials.id, referenceIds))
       : [];
 
-    const article = await this.aiProvider.generateArticle({
+    const activeProvider = this.providerOverrides.get(jobId) ?? this.aiProvider;
+    this.providerOverrides.delete(jobId);
+    const article = await activeProvider.generateArticle({
       keyword: job.keyword,
       targetGenre: job.targetGenre,
       additionalInstruction: job.additionalInstruction,
       referenceSummaries: references.map((item) => item.summaryText),
       monetizationEnabled: job.monetizationEnabled === 1,
       salesMode: job.salesMode as "normal" | "free_paid",
-      desiredPriceYen: job.desiredPriceYen ?? null
+      desiredPriceYen: job.desiredPriceYen ?? null,
+      systemPrompt: promptTemplate.articleSystemPrompt,
+      userPromptTemplate: promptTemplate.articleUserPromptTemplate
     });
 
     await this.db.insert(generatedArticles).values({
@@ -135,10 +143,10 @@ export class GenerationService {
 
     await this.db
       .update(generationJobs)
-      .set({ status: "succeeded", updatedAt: now() })
+      .set({ status: "succeeded", providerName: activeProvider.providerName, updatedAt: now() })
       .where(eq(generationJobs.id, jobId));
 
-    await this.log(jobId, "info", "article", "記事生成が完了");
+    await this.log(jobId, "info", "article", `記事生成が完了 (${activeProvider.providerName})`);
     if (job.monetizationEnabled === 1) {
       await this.log(jobId, "info", "sales", "無料→有料導線を生成");
     }

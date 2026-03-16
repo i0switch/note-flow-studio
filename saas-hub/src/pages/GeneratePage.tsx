@@ -10,15 +10,15 @@ import { useAppData } from "@/context/AppDataContext";
 import { providerLabels, type ProviderId } from "@/lib/app-data";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
-import { CalendarClock, CalendarIcon, Globe, Save } from "lucide-react";
-import { useState } from "react";
+import { CalendarClock, CalendarIcon, Globe, Paperclip, Plus, Save, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
 export default function GeneratePage() {
   const navigate = useNavigate();
-  const { state, createGeneratedArticle, publishArticle, saveDraft } = useAppData();
+  const { state, createReferenceMaterial, createGeneratedArticle, publishArticle, saveDraft } = useAppData();
   const [keyword, setKeyword] = useState("");
   const [genre, setGenre] = useState("テクノロジー");
   const [selectedAccount, setSelectedAccount] = useState(state.accounts[0]?.id ?? "");
@@ -30,13 +30,58 @@ export default function GeneratePage() {
   const [scheduleDate, setScheduleDate] = useState<Date>();
   const [scheduleTime, setScheduleTime] = useState("09:00");
   const [submittingAction, setSubmittingAction] = useState<"publish" | "draft" | "schedule" | null>(null);
+  const [generationStep, setGenerationStep] = useState<string>("準備中...");
+  const [generationProgress, setGenerationProgress] = useState(0);
+  const [hideProgress, setHideProgress] = useState(false);
+  const progressTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [useDefaultProvider, setUseDefaultProvider] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<ProviderId>(state.settings.defaultProvider);
+  const [urlInput, setUrlInput] = useState("");
+  const [referenceUrls, setReferenceUrls] = useState<string[]>([]);
+  const [referenceFiles, setReferenceFiles] = useState<{ name: string; content: string }[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // タイマークリーンアップ
+  useEffect(() => () => { if (progressTimerRef.current) clearInterval(progressTimerRef.current); }, []);
 
   const selectedAccountName = state.accounts.find((account) => account.id === selectedAccount)?.name ?? "未選択";
   const selectedPromptName = state.prompts.find((prompt) => prompt.id === selectedPrompt)?.title ?? "未選択";
   const scheduledAt =
     showSchedule && scheduleDate ? `${format(scheduleDate, "yyyy-MM-dd")} ${scheduleTime}` : null;
+
+  const addUrl = () => {
+    const url = urlInput.trim();
+    if (!url) return;
+    try { new URL(url); } catch { toast.error("正しいURLを入力して"); return; }
+    if (referenceUrls.includes(url)) { toast.error("同じURLはすでに追加済みだよ"); return; }
+    setReferenceUrls((prev) => [...prev, url]);
+    setUrlInput("");
+  };
+
+  const removeUrl = (url: string) => setReferenceUrls((prev) => prev.filter((u) => u !== url));
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    for (const file of files) {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      if (!["txt", "md"].includes(ext ?? "")) {
+        toast.error(`.txt と .md のみ対応してるよ（${file.name}）`);
+        continue;
+      }
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        setReferenceFiles((prev) => {
+          if (prev.some((f) => f.name === file.name)) return prev;
+          return [...prev, { name: file.name, content }];
+        });
+      };
+      reader.readAsText(file);
+    }
+    event.target.value = "";
+  };
+
+  const removeFile = (name: string) => setReferenceFiles((prev) => prev.filter((f) => f.name !== name));
 
   const toggleSchedule = () => {
     setShowSchedule((current) => {
@@ -60,7 +105,43 @@ export default function GeneratePage() {
     }
 
     setSubmittingAction(action);
+    setGenerationProgress(0);
+    setGenerationStep("準備中...");
+    setHideProgress(false);
     try {
+      // 参考資料を先に登録してIDを取得
+      const refIds: number[] = [];
+      const hasRefs = referenceUrls.length > 0 || referenceFiles.length > 0;
+      if (hasRefs) {
+        setGenerationStep("参考資料を取得中...");
+        setGenerationProgress(5);
+      }
+      for (const url of referenceUrls) {
+        try {
+          const result = await createReferenceMaterial({ type: "url", url });
+          refIds.push(result.id);
+        } catch {
+          toast.error(`URL取得に失敗したけど続行するよ: ${url}`);
+        }
+      }
+      for (const file of referenceFiles) {
+        try {
+          const result = await createReferenceMaterial({ type: "file", filename: file.name, content: file.content });
+          refIds.push(result.id);
+        } catch {
+          toast.error(`ファイル登録に失敗したけど続行するよ: ${file.name}`);
+        }
+      }
+
+      // AI 生成フェーズ: 偽プログレスでじわじわ動かす
+      setGenerationStep("AI が記事を執筆中...");
+      setGenerationProgress(hasRefs ? 15 : 8);
+      let fakeProgress = hasRefs ? 15 : 8;
+      progressTimerRef.current = setInterval(() => {
+        fakeProgress += Math.random() * 1.5 + 0.5;
+        if (fakeProgress < 78) setGenerationProgress(Math.round(fakeProgress));
+      }, 600);
+
       const article = createGeneratedArticle({
         keyword: keyword.trim(),
         genre,
@@ -72,25 +153,39 @@ export default function GeneratePage() {
         scheduledAt,
         action,
         providerId: useDefaultProvider ? undefined : selectedProvider,
+        referenceMaterialIds: refIds,
       });
       const resolvedArticle = await article;
+
+      // 生成完了 → note 保存フェーズ
+      if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+      setGenerationProgress(82);
+      setGenerationStep("note に保存中...");
 
       navigate(`/articles/${resolvedArticle.id}`);
 
       if (action === "publish") {
         const result = await publishArticle(resolvedArticle.id);
+        setGenerationProgress(100);
+        setGenerationStep("完了！");
         toast.success(result?.noteUrl ? "記事を生成して note 公開した" : "記事を生成して公開キューに回した");
         return;
       }
 
       if (action === "draft") {
         const result = await saveDraft(resolvedArticle.id);
+        setGenerationProgress(100);
+        setGenerationStep("完了！");
         toast.success(result?.noteUrl ? "記事を生成して note 下書き保存した" : "記事を生成して下書き保存を開始した");
         return;
       }
 
+      setGenerationProgress(100);
+      setGenerationStep("完了！");
       toast.success("記事を生成して予約投稿設定に回した");
     } catch (error) {
+      if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+      setGenerationProgress(0);
       toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
     } finally {
       setSubmittingAction(null);
@@ -197,6 +292,59 @@ export default function GeneratePage() {
             </div>
           </div>
 
+          <div className="card-elevated space-y-4">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <span className="inline-block h-4 w-1 rounded-full bg-primary" />
+              参考資料（任意）
+            </h2>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">URLを追加</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="https://example.com/article"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUrl(); } }}
+                />
+                <Button type="button" variant="outline" size="icon" onClick={addUrl}>
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+              {referenceUrls.length > 0 && (
+                <ul className="space-y-1">
+                  {referenceUrls.map((url) => (
+                    <li key={url} className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-1.5 text-xs">
+                      <span className="truncate text-muted-foreground max-w-[90%]">{url}</span>
+                      <button type="button" onClick={() => removeUrl(url)} className="ml-2 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">ファイルを追加（.txt / .md）</Label>
+              <input ref={fileInputRef} type="file" accept=".txt,.md" multiple className="hidden" onChange={handleFileSelect} />
+              <Button type="button" variant="outline" className="gap-2 w-full" onClick={() => fileInputRef.current?.click()}>
+                <Paperclip className="h-4 w-4" />
+                ファイルを選択
+              </Button>
+              {referenceFiles.length > 0 && (
+                <ul className="space-y-1">
+                  {referenceFiles.map((file) => (
+                    <li key={file.name} className="flex items-center justify-between rounded-lg border border-border/60 px-3 py-1.5 text-xs">
+                      <span className="text-muted-foreground">{file.name}</span>
+                      <button type="button" onClick={() => removeFile(file.name)} className="ml-2 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
           {showSchedule && (
             <div className="card-elevated space-y-4 border-primary/30">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
@@ -256,6 +404,37 @@ export default function GeneratePage() {
               生成後予約投稿
             </Button>
           </div>
+
+          {submittingAction !== null && !hideProgress && (
+            <div className="card-elevated space-y-3 border-primary/30 bg-primary/5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium text-foreground">{generationStep}</span>
+                <div className="flex items-center gap-3">
+                  <span className="tabular-nums text-muted-foreground">{generationProgress}%</span>
+                  <button
+                    type="button"
+                    onClick={() => setHideProgress(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    バックグラウンドで待機
+                  </button>
+                </div>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-all duration-700 ease-out"
+                  style={{ width: `${generationProgress}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {generationProgress < 80
+                  ? "AI が記事を書いてる。最大 2〜3 分かかる場合があるよ..."
+                  : generationProgress < 100
+                  ? "note に保存中..."
+                  : "完了！画面が切り替わるよ"}
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="lg:col-span-1">

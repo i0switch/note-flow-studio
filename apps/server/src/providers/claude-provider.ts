@@ -1,16 +1,30 @@
 import { buildArticle, type BuiltArticle } from "../services/content-builder.js";
 import type { AiProvider, ArticleGenerationRequest } from "./ai-provider.js";
 
-const buildJapaneseArticlePrompt = (input: ArticleGenerationRequest): string =>
-  [
-    "あなたはnote向けの販売記事生成アシスタント。",
+const JSON_INSTRUCTION =
+  "JSON形式（コードブロック不要）で以下フィールドを返す: " +
+  "title（記事タイトル）, genreLabel, leadText（冒頭リード1〜2文）, " +
+  "freePreviewMarkdown（無料パート: 問題提起・共感・途中ヒント。読者が続きを読みたくなる内容）, " +
+  "paidContentMarkdown（有料パート: 具体的ノウハウ・実践ステップ・テンプレ。salesModeがnormalなら空文字）, " +
+  "transitionCtaText（無料→有料の誘導文）, salesHookText（購入フック文）, " +
+  "recommendedPriceYen（推奨価格の数値）, " +
+  "bodyMarkdown（freePreviewMarkdownとpaidContentMarkdownを結合した全文マークダウン）, " +
+  "noteRenderedBody（bodyMarkdownと同じ値）。" +
+  "【禁止】実在しない特典・ダウンロード・プレゼント・PDF・テンプレ配布・URLを記事内に書くこと。";
+
+const buildPromptMessages = (input: ArticleGenerationRequest) => {
+  const systemPrompt = input.systemPrompt ?? "あなたはnote向けの販売記事生成アシスタント。";
+  const parts = [
     `キーワード: ${input.keyword}`,
     `ジャンル: ${input.targetGenre ?? "auto"}`,
     `補足指示: ${input.additionalInstruction || "なし"}`,
     `販売モード: ${input.salesMode}`,
     `参考資料: ${input.referenceSummaries.join("\n") || "なし"}`,
-    "JSON形式で title, genreLabel, leadText, freePreviewMarkdown, paidContentMarkdown, transitionCtaText, salesHookText, recommendedPriceYen, bodyMarkdown, noteRenderedBody を返す。",
-  ].join("\n");
+    ...(input.userPromptTemplate ? [input.userPromptTemplate] : []),
+    JSON_INSTRUCTION,
+  ];
+  return { systemPrompt, userContent: parts.join("\n") };
+};
 
 export class ClaudeProvider implements AiProvider {
   readonly providerName = "claude";
@@ -28,6 +42,7 @@ export class ClaudeProvider implements AiProvider {
     }
 
     try {
+      const { systemPrompt, userContent } = buildPromptMessages(input);
       const response = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -38,7 +53,8 @@ export class ClaudeProvider implements AiProvider {
         body: JSON.stringify({
           model: this.options.model,
           max_tokens: 4000,
-          messages: [{ role: "user", content: buildJapaneseArticlePrompt(input) }],
+          system: systemPrompt,
+          messages: [{ role: "user", content: userContent }],
         }),
       });
 

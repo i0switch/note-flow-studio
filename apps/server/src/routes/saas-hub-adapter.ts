@@ -13,8 +13,10 @@ import {
   generationJobs,
   noteAccounts,
   promptTemplates,
+  referenceMaterials,
   saveAttempts,
 } from "../db/schema.js";
+import { isBlockedUrl } from "../app.js";
 import type { AiProvider } from "../providers/ai-provider.js";
 import { GitHubCopilotProvider } from "../providers/github-copilot-provider.js";
 import type { GenerationService } from "../services/generation-service.js";
@@ -24,6 +26,12 @@ import type { ProviderRegistry, ProviderId, ProviderSummary } from "../services/
 import fs from "node:fs/promises";
 import { captureSession, getDependencyChecks, installPlaywrightBrowser } from "../setup/setup-service.js";
 import { resolveDataPath } from "../config.js";
+
+// ---- UTC → JST 変換ヘルパー ----
+const toJST = (isoString: string) => {
+  const d = new Date(isoString);
+  return new Date(d.getTime() + 9 * 60 * 60 * 1000).toISOString();
+};
 
 // ---- local type aliases mirroring saas-hub/src/lib/app-data.ts ----
 type AppStatusType = "generating" | "completed" | "error" | "saved" | "published" | "pending" | "running";
@@ -159,18 +167,18 @@ async function buildArticleRecord(
   const lastMethod = (lastAttempt?.method ?? null) as NoteMethod | null;
 
   const timeline: TimelineItem[] = [
-    { label: "記事生成受付", time: job.createdAt.slice(11, 19), status: "info" },
+    { label: "記事生成受付", time: toJST(job.createdAt).slice(11, 19), status: "info" },
   ];
   if (job.status === "succeeded" && article) {
-    timeline.push({ label: "本文生成完了", time: job.updatedAt.slice(11, 19), status: "success" });
+    timeline.push({ label: "本文生成完了", time: toJST(job.updatedAt).slice(11, 19), status: "success" });
   }
   if (job.status === "failed") {
-    timeline.push({ label: "生成失敗", time: job.updatedAt.slice(11, 19), status: "error" });
+    timeline.push({ label: "生成失敗", time: toJST(job.updatedAt).slice(11, 19), status: "error" });
   }
   for (const attempt of attempts.slice().reverse()) {
     timeline.push({
       label: attempt.result === "success" ? "note 保存完了" : "note 保存失敗",
-      time: (attempt.finishedAt ?? attempt.startedAt).slice(11, 19),
+      time: toJST(attempt.finishedAt ?? attempt.startedAt).slice(11, 19),
       status: attempt.result === "success" ? "success" : "error",
     });
   }
@@ -184,7 +192,7 @@ async function buildArticleRecord(
     genre: article?.genreLabel ?? job.targetGenre ?? "",
     status: jobStatusToAppStatus(job.status),
     noteStatus,
-    createdAt: job.createdAt.slice(0, 10),
+    createdAt: toJST(job.createdAt).slice(0, 10),
     scheduledAt: null,
     noteUrl: lastNoteUrl,
     freeContent: article?.freePreviewMarkdown ?? "",
@@ -198,7 +206,7 @@ async function buildArticleRecord(
     accountId: String(job.noteAccountId),
     promptId: String(job.promptTemplateId),
     instruction: job.additionalInstruction || undefined,
-    providerId: "gemini",
+    providerId: (job.providerName || "gemini") as ProviderId,
     lastNoteMethod: lastMethod,
     saleSettingStatus: lastAttempt?.saleSettingStatus ?? null,
     lastError: lastAttempt?.errorMessage ?? null,
@@ -309,94 +317,196 @@ export async function registerSaasHubAdapterRoutes(
 
   // ---- PUT /api/state ----
   app.put("/api/state", async (request, reply) => {
-    const body = request.body as { state: AppDataState };
-    const { state } = body;
-    const now = () => new Date().toISOString();
+    try {
+      const body = request.body as { state: AppDataState };
+      const { state } = body;
+      const now = () => new Date().toISOString();
 
-    // Upsert accounts by displayName
-    const incomingAccountNames = (state.accounts ?? []).map((a) => a.name);
-    for (const account of state.accounts ?? []) {
-      const existing = await db
-        .select()
-        .from(noteAccounts)
-        .where(eq(noteAccounts.displayName, account.name))
-        .limit(1);
-      if (existing.length > 0) {
-        await db
-          .update(noteAccounts)
-          .set({ updatedAt: now() })
-          .where(eq(noteAccounts.id, existing[0].id));
+      // Upsert accounts by displayName
+      const incomingAccountNames = (state.accounts ?? []).map((a) => a.name);
+      for (const account of state.accounts ?? []) {
+        const existing = await db
+          .select()
+          .from(noteAccounts)
+          .where(eq(noteAccounts.displayName, account.name))
+          .limit(1);
+        if (existing.length > 0) {
+          await db
+            .update(noteAccounts)
+            .set({ updatedAt: now() })
+            .where(eq(noteAccounts.id, existing[0].id));
+        } else {
+          await db.insert(noteAccounts).values({
+            displayName: account.name,
+            saveModePriority: "unofficial_api",
+            browserAdapterPriority: "playwright",
+            fallbackEnabled: 1,
+            isActive: 1,
+            defaultSalesProfileId: null,
+            defaultPromptTemplateId: null,
+            createdAt: now(),
+            updatedAt: now(),
+          });
+        }
+      }
+      // Delete DB accounts that are no longer in the state
+      if (incomingAccountNames.length > 0) {
+        await db.delete(noteAccounts).where(notInArray(noteAccounts.displayName, incomingAccountNames));
       } else {
-        await db.insert(noteAccounts).values({
-          displayName: account.name,
-          saveModePriority: "unofficial_api",
-          browserAdapterPriority: "playwright",
-          fallbackEnabled: 1,
-          isActive: 1,
-          defaultSalesProfileId: null,
-          defaultPromptTemplateId: null,
-          createdAt: now(),
-          updatedAt: now(),
-        });
+        await db.delete(noteAccounts);
       }
+
+      // Upsert prompts by name (Bug #3: null-safe, Bug #7: UPDATE ロジック追加)
+      for (const prompt of state.prompts ?? []) {
+        const existing = await db
+          .select()
+          .from(promptTemplates)
+          .where(eq(promptTemplates.name, prompt.title))
+          .limit(1);
+        if (existing.length === 0) {
+          await db.insert(promptTemplates).values({
+            name: prompt.title,
+            purpose: prompt.description ?? "",
+            targetMedia: "note",
+            genreScope: "all",
+            articleSystemPrompt: prompt.content ?? "",
+            articleUserPromptTemplate: prompt.content ?? "",
+            referencePromptTemplate: "",
+            salesTransitionTemplate: "",
+            createdAt: now(),
+            updatedAt: now(),
+          });
+        } else {
+          await db
+            .update(promptTemplates)
+            .set({
+              purpose: prompt.description ?? "",
+              articleSystemPrompt: prompt.content ?? "",
+              articleUserPromptTemplate: prompt.content ?? "",
+              updatedAt: now(),
+            })
+            .where(eq(promptTemplates.name, prompt.title));
+        }
+      }
+      // Delete DB prompts that are no longer in the state (Bug #4)
+      // prompts が空配列の場合は全件削除しない（UI で全件削除しても意図せずDBが空になるのを防ぐ）
+      const incomingPromptTitles = (state.prompts ?? []).map((p) => p.title);
+      if (incomingPromptTitles.length > 0) {
+        await db.delete(promptTemplates).where(notInArray(promptTemplates.name, incomingPromptTitles));
+      }
+
+      // Update DB appSettings
+      if (state.settings) {
+        await db
+          .update(appSettings)
+          .set({
+            localhostPort: state.settings.localhostPort ?? 3001,
+            updatedAt: now(),
+          })
+          .where(eq(appSettings.id, 1));
+      }
+
+      // Save full state to sidecar, preserving server-side-only keys (Bugs #1, #2: write lock で排他制御)
+      await stateService.updateSidecar((existing) => ({
+        ...state as unknown as Record<string, unknown>,
+        providerConfigs: existing.providerConfigs,
+        providerSummaries: existing.providerSummaries,
+        githubCopilotAuth: existing.githubCopilotAuth,
+        deletedJobIds: existing.deletedJobIds,
+      }));
+
+      reply.send({ result: "success", providers: providerRegistry.getAll() });
+    } catch (error) {
+      reply.code(500).send({
+        error: {
+          code: "STATE_UPDATE_FAILED",
+          message: error instanceof Error ? error.message : "状態の更新に失敗した",
+        },
+      });
     }
-    // Delete DB accounts that are no longer in the state
-    if (incomingAccountNames.length > 0) {
-      await db.delete(noteAccounts).where(notInArray(noteAccounts.displayName, incomingAccountNames));
+  });
+
+  // ---- POST /api/reference-materials ----
+  app.post("/api/reference-materials", async (request, reply) => {
+    const body = request.body as {
+      type?: "url" | "file";
+      url?: string;
+      filename?: string;
+      content?: string;
+      title?: string;
+    } | null;
+
+    if (!body?.type || !["url", "file"].includes(body.type)) {
+      reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "type が url または file である必要があります" } });
+      return;
+    }
+
+    let title = body.title?.trim() ?? "";
+    let extractedText = "";
+    let sourcePathOrUrl = "";
+
+    if (body.type === "url") {
+      if (!body.url?.trim()) {
+        reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "url が必要です" } });
+        return;
+      }
+      if (isBlockedUrl(body.url)) {
+        reply.code(400).send({ error: { code: "BLOCKED_URL", message: "このURLは使用できません" } });
+        return;
+      }
+      try {
+        const res = await fetch(body.url, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) {
+          reply.code(400).send({ error: { code: "FETCH_FAILED", message: `URL取得失敗: HTTP ${res.status}` } });
+          return;
+        }
+        const html = await res.text();
+        extractedText = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 10_000);
+        sourcePathOrUrl = body.url;
+        title = title || body.url;
+      } catch {
+        reply.code(400).send({ error: { code: "FETCH_ERROR", message: "URLの取得中にエラーが発生しました" } });
+        return;
+      }
     } else {
-      await db.delete(noteAccounts);
-    }
-
-    // Upsert prompts by name
-    for (const prompt of state.prompts ?? []) {
-      const existing = await db
-        .select()
-        .from(promptTemplates)
-        .where(eq(promptTemplates.name, prompt.title))
-        .limit(1);
-      if (existing.length === 0) {
-        await db.insert(promptTemplates).values({
-          name: prompt.title,
-          purpose: prompt.description,
-          targetMedia: "note",
-          genreScope: "all",
-          articleSystemPrompt: prompt.content,
-          articleUserPromptTemplate: prompt.content,
-          referencePromptTemplate: "",
-          salesTransitionTemplate: "",
-          createdAt: now(),
-          updatedAt: now(),
-        });
+      if (!body.filename?.trim() || body.content == null) {
+        reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "filename と content が必要です" } });
+        return;
       }
+      const ext = body.filename.split(".").pop()?.toLowerCase();
+      if (!["txt", "md"].includes(ext ?? "")) {
+        reply.code(400).send({ error: { code: "UNSUPPORTED_FILE", message: ".txt と .md のみ対応しています" } });
+        return;
+      }
+      extractedText = body.content.slice(0, 10_000);
+      sourcePathOrUrl = body.filename;
+      title = title || body.filename;
     }
 
-    // Update DB appSettings
-    if (state.settings) {
-      await db
-        .update(appSettings)
-        .set({
-          localhostPort: state.settings.localhostPort ?? 3001,
-          updatedAt: now(),
-        })
-        .where(eq(appSettings.id, 1));
-    }
+    const nowStr = new Date().toISOString();
+    const [inserted] = await db
+      .insert(referenceMaterials)
+      .values({
+        title,
+        sourceType: body.type,
+        sourcePathOrUrl,
+        extractedText,
+        summaryText: extractedText.slice(0, 500),
+        genreLabel: null,
+        tagsJson: "[]",
+        isActive: 1,
+        createdAt: nowStr,
+        updatedAt: nowStr,
+      })
+      .returning();
 
-    // Save full state to sidecar, preserving server-side-only keys
-    const existing = (await stateService.load()) ?? {};
-    await stateService.save({
-      ...state as unknown as Record<string, unknown>,
-      providerConfigs: existing.providerConfigs,
-      providerSummaries: existing.providerSummaries,
-      githubCopilotAuth: existing.githubCopilotAuth,
-    });
-
-    reply.send({ result: "success", providers: providerRegistry.getAll() });
+    reply.code(201).send({ id: inserted.id, title: inserted.title });
   });
 
   // ---- POST /api/generate-article ----
   app.post("/api/generate-article", async (request, reply) => {
     const body = request.body as {
-      input: {
+      input?: {
         keyword: string;
         genre?: string;
         accountId: string;
@@ -407,9 +517,16 @@ export async function registerSaasHubAdapterRoutes(
         action: "publish" | "draft" | "schedule";
         providerId?: ProviderId;
         scheduledAt?: string | null;
+        referenceMaterialIds?: number[];
       };
-      settings: AppSettings;
-    };
+      settings?: AppSettings;
+    } | null;
+
+    // Bug #5: input が undefined の場合（JSON パース失敗 or フィールド欠落）は即 400
+    if (!body?.input) {
+      reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "inputが必要です" } });
+      return;
+    }
 
     const { input } = body;
 
@@ -436,6 +553,13 @@ export async function registerSaasHubAdapterRoutes(
       promptTemplateId = firstTemplate.id;
     }
 
+    // Resolve provider override (if requested and not the default gemini)
+    const selectedProviderId = input.providerId;
+    const aiProviderOverride =
+      selectedProviderId && selectedProviderId !== "gemini"
+        ? providerRegistry.createProvider(selectedProviderId) ?? undefined
+        : undefined;
+
     // Create the job
     const job = await generationService.createJob({
       keyword: input.keyword,
@@ -446,11 +570,12 @@ export async function registerSaasHubAdapterRoutes(
       salesMode: input.saleMode === "paid" ? "free_paid" : "normal",
       desiredPriceYen: input.price ?? null,
       additionalInstruction: input.instruction ?? "",
-      referenceMaterialIds: [],
+      referenceMaterialIds: input.referenceMaterialIds ?? [],
+      aiProviderOverride,
     });
 
     // Poll until done
-    const TIMEOUT_MS = 90_000;
+    const TIMEOUT_MS = 180_000;
     const INTERVAL_MS = 500;
     const startedAt = Date.now();
 
@@ -788,12 +913,12 @@ export async function registerSaasHubAdapterRoutes(
       reply.send({ result: "success" });
       return;
     }
-    const sidecar = ((await stateService.load()) ?? {}) as Record<string, unknown>;
-    const deletedJobIds: number[] = (sidecar.deletedJobIds as number[]) ?? [];
-    if (!deletedJobIds.includes(id)) {
-      deletedJobIds.push(id);
-    }
-    await stateService.save({ ...sidecar, deletedJobIds });
+    // write lock で排他制御（Bugs #1, #2: PUT /api/state との競合防止）
+    await stateService.updateSidecar((existing) => {
+      const deletedJobIds: number[] = (existing.deletedJobIds as number[]) ?? [];
+      if (!deletedJobIds.includes(id)) deletedJobIds.push(id);
+      return { ...existing, deletedJobIds };
+    });
     reply.send({ result: "success" });
   });
 

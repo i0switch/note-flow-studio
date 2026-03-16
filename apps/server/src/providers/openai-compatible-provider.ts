@@ -1,16 +1,33 @@
 import { buildArticle, type BuiltArticle } from "../services/content-builder.js";
 import type { AiProvider, ArticleGenerationRequest } from "./ai-provider.js";
 
-const buildJapaneseArticlePrompt = (input: ArticleGenerationRequest): string =>
-  [
-    "あなたはnote向けの販売記事生成アシスタント。",
+const JSON_INSTRUCTION =
+  "JSON形式（コードブロック不要）で以下フィールドを返す: " +
+  "title（記事タイトル）, genreLabel, leadText（冒頭リード1〜2文）, " +
+  "freePreviewMarkdown（無料パート: 問題提起・共感・途中ヒント。読者が続きを読みたくなる内容）, " +
+  "paidContentMarkdown（有料パート: 具体的ノウハウ・実践ステップ・テンプレ・実例・コード例など。salesModeがnormalなら空文字。有料パートは最低でも2500文字以上の充実した内容で書くこと）, " +
+  "transitionCtaText（無料→有料の誘導文）, salesHookText（購入フック文）, " +
+  "recommendedPriceYen（推奨価格の数値）, " +
+  "bodyMarkdown（freePreviewMarkdownとpaidContentMarkdownを結合した全文マークダウン）, " +
+  "noteRenderedBody（bodyMarkdownと同じ値）。" +
+  "【禁止】実在しない特典・ダウンロード・プレゼント・PDF・テンプレ配布・URLを記事内に書くこと。";
+
+const buildPromptMessages = (input: ArticleGenerationRequest) => {
+  const systemPrompt = input.systemPrompt ?? "あなたはnote向けの販売記事生成アシスタント。";
+  const parts = [
     `キーワード: ${input.keyword}`,
     `ジャンル: ${input.targetGenre ?? "auto"}`,
     `補足指示: ${input.additionalInstruction || "なし"}`,
     `販売モード: ${input.salesMode}`,
     `参考資料: ${input.referenceSummaries.join("\n") || "なし"}`,
-    "JSON形式で title, genreLabel, leadText, freePreviewMarkdown, paidContentMarkdown, transitionCtaText, salesHookText, recommendedPriceYen, bodyMarkdown, noteRenderedBody を返す。",
-  ].join("\n");
+    ...(input.userPromptTemplate ? [input.userPromptTemplate] : []),
+    JSON_INSTRUCTION,
+  ];
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: parts.join("\n") },
+  ];
+};
 
 export class OpenAICompatibleProvider implements AiProvider {
   readonly providerName: string;
@@ -40,29 +57,40 @@ export class OpenAICompatibleProvider implements AiProvider {
         },
         body: JSON.stringify({
           model: this.options.model,
-          messages: [{ role: "user", content: buildJapaneseArticlePrompt(input) }],
-          max_tokens: 4000,
+          messages: buildPromptMessages(input),
+          max_tokens: 16000,
+          // Qwen3 などの thinking モデルでは思考を無効化して速度優先
+          enable_thinking: false,
         }),
+        signal: AbortSignal.timeout(180_000),
       });
 
       if (!response.ok) {
-        return buildArticle(input);
+        const errorBody = await response.text().catch(() => "(読めなかった)");
+        throw new Error(`${this.options.providerName} API エラー HTTP ${response.status}: ${errorBody.slice(0, 300)}`);
       }
 
       const data = (await response.json()) as {
-        choices?: { message?: { content?: string } }[];
+        choices?: { message?: { content?: string }; finish_reason?: string }[];
       };
-      const text = data.choices?.[0]?.message?.content ?? "";
+      const choice = data.choices?.[0];
+      const text = choice?.message?.content ?? "";
+      const finishReason = choice?.finish_reason ?? "unknown";
+      if (finishReason === "length") {
+        throw new Error(`${this.options.providerName} API レスポンスがトークン上限で途中切断されました (finish_reason=length)。max_tokensを増やしてください。`);
+      }
       const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return buildArticle(input);
+      if (!match) {
+        throw new Error(`${this.options.providerName} API レスポンスに JSON が見つからない。finish_reason=${finishReason} 先頭200文字: ${text.slice(0, 200)}`);
+      }
 
       try {
         return { ...buildArticle(input), ...(JSON.parse(match[0]) as Partial<BuiltArticle>) };
-      } catch {
-        return buildArticle(input);
+      } catch (e) {
+        throw new Error(`${this.options.providerName} API JSON パース失敗: ${e instanceof Error ? e.message : String(e)}`);
       }
-    } catch {
-      return buildArticle(input);
+    } catch (e) {
+      throw e instanceof Error ? e : new Error(`${this.options.providerName} 生成エラー: ${String(e)}`);
     }
   }
 

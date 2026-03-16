@@ -19,6 +19,7 @@ import {
 } from "@/lib/app-data";
 import {
   captureNoteSession as captureNoteSessionApi,
+  createReferenceMaterial as createReferenceMaterialApi,
   deleteArticle as deleteArticleApi,
   fetchAiProviders,
   fetchRemoteState,
@@ -59,6 +60,7 @@ type GeneratedArticleInput = {
   scheduledAt?: string | null;
   action: "publish" | "draft" | "schedule";
   providerId?: ProviderId;
+  referenceMaterialIds?: number[];
 };
 
 type ProviderConfigPatch = {
@@ -77,6 +79,7 @@ type AppDataContextValue = {
   state: AppDataState;
   diagnostics: DiagnosticsRecord[];
   isHydrating: boolean;
+  createReferenceMaterial: typeof createReferenceMaterialApi;
   createGeneratedArticle: (input: GeneratedArticleInput) => Promise<ArticleRecord>;
   saveManualArticle: (input: ManualArticleInput) => ArticleRecord;
   updateArticle: (id: string, patch: Partial<ArticleRecord>) => ArticleRecord | undefined;
@@ -488,7 +491,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     const article = {
       ...fallbackArticle,
       ...generated.article,
-      id: fallbackArticle.id,
+      id: generated.article?.id != null ? String(generated.article.id) : fallbackArticle.id,
       keyword: input.keyword,
       genre: input.genre,
       accountId: input.accountId,
@@ -687,7 +690,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   };
 
   const deleteArticles = async (ids: string[]) => {
-    await Promise.all(ids.map((id) => deleteArticleApi(id)));
+    for (const id of ids) {
+      await deleteArticleApi(id);
+    }
     const idSet = new Set(ids);
     updateState({
       ...stateRef.current,
@@ -735,6 +740,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     state,
     diagnostics,
     isHydrating,
+    createReferenceMaterial: createReferenceMaterialApi,
     createGeneratedArticle: createGenerated,
     saveManualArticle,
     updateArticle,

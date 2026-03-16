@@ -96,6 +96,7 @@ const buildPayload = (article: ArticleRecord, settings: AppSettings) => ({
     body: article.body,
     saleMode: article.saleMode,
     price: article.price,
+    accountId: article.accountId,
     providerId: article.providerId,
   },
   settings,
@@ -213,6 +214,16 @@ export const fetchCodexCliStatus = () =>
     };
   }>("/api/ai/providers/codex-cli/status");
 
+export const createReferenceMaterial = (
+  input:
+    | { type: "url"; url: string; title?: string }
+    | { type: "file"; filename: string; content: string; title?: string },
+) =>
+  requestJson<{ id: number; title: string }>("/api/reference-materials", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+
 export const generateArticle = (
   input: {
     keyword: string;
@@ -227,6 +238,7 @@ export const generateArticle = (
     scheduledAt?: string | null;
     action: "publish" | "draft" | "schedule";
     providerId?: ProviderId;
+    referenceMaterialIds?: number[];
   },
   settings: AppSettings,
 ) =>

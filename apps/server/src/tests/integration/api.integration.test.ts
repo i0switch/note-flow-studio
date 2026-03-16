@@ -456,6 +456,30 @@ describe("API integration", () => {
     expect(ids).not.toContain(String(jobId));
   });
 
+  it("SSRFガードが有効なとき内部IPへのURLリクエストを拒否する", async () => {
+    // Build a separate app instance with SSRF check enabled
+    const ssrfApp = await buildApp({
+      db: createDatabase(":memory:"),
+      stateFilePath: path.join(os.tmpdir(), `note-local-ssrf-${Date.now()}.json`),
+      // disableSsrfCheck is intentionally omitted
+    });
+
+    const response = await ssrfApp.inject({
+      method: "POST",
+      url: "/api/reference-materials/import",
+      payload: {
+        sourceType: "url",
+        sourceValue: "http://127.0.0.1/internal",
+        title: "SSRFテスト",
+        tags: []
+      }
+    });
+
+    await ssrfApp.close();
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.code).toBe("REFERENCE_URL_NOT_ALLOWED");
+  });
+
   it("UUID IDの記事削除は即座にsuccessを返す", async () => {
     const del = await app.inject({
       method: "DELETE",
@@ -613,6 +637,116 @@ describe("API integration", () => {
       payload: { article: { id: "bad", accountId: "1", saleMode: "normal" }, settings: {} },
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("GET /api/settings のレスポンスに geminiApiKey が含まれない (秘密漏洩回帰)", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toHaveProperty("hasGeminiApiKey");
+    expect(typeof body.hasGeminiApiKey).toBe("boolean");
+    expect(body).not.toHaveProperty("geminiApiKey");
+  });
+
+  it("PUT /api/settings のレスポンスに geminiApiKey が含まれない (秘密漏洩回帰)", async () => {
+    const current = (await app.inject({ method: "GET", url: "/api/settings" })).json() as Record<string, unknown>;
+    const res = await app.inject({
+      method: "PUT",
+      url: "/api/settings",
+      payload: { ...current, localhostPort: 4001 },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as Record<string, unknown>;
+    expect(body).toHaveProperty("hasGeminiApiKey");
+    expect(typeof body.hasGeminiApiKey).toBe("boolean");
+    expect(body).not.toHaveProperty("geminiApiKey");
+  });
+
+  it("PUT /api/settings のペイロードに geminiApiKey を渡しても hasGeminiApiKey は env に依存する", async () => {
+    const originalKey = env.GEMINI_API_KEY;
+    env.GEMINI_API_KEY = undefined;
+    try {
+      const current = (await app.inject({ method: "GET", url: "/api/settings" })).json() as Record<string, unknown>;
+      const res = await app.inject({
+        method: "PUT",
+        url: "/api/settings",
+        payload: { ...current, geminiApiKey: "fake-key-should-not-override" },
+      });
+      expect(res.statusCode).toBe(200);
+      // env.GEMINI_API_KEY が未設定なので、ペイロードの geminiApiKey に関わらず false になる
+      expect(res.json().hasGeminiApiKey).toBe(false);
+    } finally {
+      env.GEMINI_API_KEY = originalKey;
+    }
+  });
+
+  it("allowedFileDir 外のファイルパスは 400 REFERENCE_FILE_PATH_NOT_ALLOWED を返す", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/reference-materials/import",
+      payload: {
+        sourceType: "file",
+        sourceValue: "/etc/passwd",
+        title: "トラバーサルテスト",
+        tags: []
+      }
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("REFERENCE_FILE_PATH_NOT_ALLOWED");
+  });
+
+  it("apply-note-sale-settings: 存在しないジョブIDは 404 JOB_NOT_FOUND を返す", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs/99998/apply-note-sale-settings",
+      payload: {
+        priceYen: 980,
+        freePreviewRatio: 0.3,
+        transitionCtaText: "有料部分です"
+      }
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe("JOB_NOT_FOUND");
+  });
+
+  // ---- リストエンドポイント ----
+
+  it("GET /api/generation-jobs → 配列を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/generation-jobs" });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  it("GET /api/reference-materials → 配列を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/reference-materials" });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  it("GET /api/prompt-templates → 配列を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/prompt-templates" });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  it("GET /api/sales-profiles → 配列を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/sales-profiles" });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  it("GET /api/note-accounts → 配列を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/note-accounts" });
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.json())).toBe(true);
+  });
+
+  // ---- 404 ケース ----
+
+  it("GET /api/generation-jobs/:id 存在しないIDは 404 を返す", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/generation-jobs/99999" });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error.code).toBe("JOB_NOT_FOUND");
   });
 
   it("存在しないジョブへの保存と公開は 400 を返す", async () => {

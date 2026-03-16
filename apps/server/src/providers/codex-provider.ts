@@ -23,16 +23,30 @@ export async function readLocalCodexToken(): Promise<string | null> {
   }
 }
 
-const buildPrompt = (input: ArticleGenerationRequest): string =>
-  [
-    "あなたはnote向けの販売記事生成アシスタント。",
+const JSON_INSTRUCTION =
+  "JSON形式（コードブロック不要）で以下フィールドを返す: " +
+  "title（記事タイトル）, genreLabel, leadText（冒頭リード1〜2文）, " +
+  "freePreviewMarkdown（無料パート: 問題提起・共感・途中ヒント。読者が続きを読みたくなる内容）, " +
+  "paidContentMarkdown（有料パート: 具体的ノウハウ・実践ステップ・テンプレ。salesModeがnormalなら空文字）, " +
+  "transitionCtaText（無料→有料の誘導文）, salesHookText（購入フック文）, " +
+  "recommendedPriceYen（推奨価格の数値）, " +
+  "bodyMarkdown（freePreviewMarkdownとpaidContentMarkdownを結合した全文マークダウン）, " +
+  "noteRenderedBody（bodyMarkdownと同じ値）。" +
+  "【禁止】実在しない特典・ダウンロード・プレゼント・PDF・テンプレ配布・URLを記事内に書くこと。";
+
+const buildPromptMessages = (input: ArticleGenerationRequest) => {
+  const systemPrompt = input.systemPrompt ?? "あなたはnote向けの販売記事生成アシスタント。";
+  const parts = [
     `キーワード: ${input.keyword}`,
     `ジャンル: ${input.targetGenre ?? "auto"}`,
     `補足指示: ${input.additionalInstruction || "なし"}`,
     `販売モード: ${input.salesMode}`,
     `参考資料: ${input.referenceSummaries.join("\n") || "なし"}`,
-    "JSON形式で title, genreLabel, leadText, freePreviewMarkdown, paidContentMarkdown, transitionCtaText, salesHookText, recommendedPriceYen, bodyMarkdown, noteRenderedBody を返す。",
-  ].join("\n");
+    ...(input.userPromptTemplate ? [input.userPromptTemplate] : []),
+    JSON_INSTRUCTION,
+  ];
+  return { systemPrompt, userContent: parts.join("\n") };
+};
 
 /**
  * OpenAI Codex provider using the Responses API (/v1/responses).
@@ -57,6 +71,7 @@ export class CodexProvider implements AiProvider {
     if (!apiKey) return buildArticle(input);
 
     try {
+      const { systemPrompt, userContent } = buildPromptMessages(input);
       const response = await fetch(RESPONSES_URL, {
         method: "POST",
         headers: {
@@ -65,7 +80,8 @@ export class CodexProvider implements AiProvider {
         },
         body: JSON.stringify({
           model: this.options.model,
-          input: buildPrompt(input),
+          instructions: systemPrompt,
+          input: userContent,
           max_output_tokens: 4000,
         }),
       });

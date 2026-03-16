@@ -84,8 +84,54 @@ const htmlToText = (html: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+/**
+ * Normalize IPv4-mapped IPv6 and non-standard IPv4 notations (decimal, hex, octal)
+ * to dotted-decimal form so that blocked-range checks work reliably.
+ * Returns the input unchanged if no normalization applies.
+ */
+const resolveHostname = (h: string): string => {
+  // IPv4-mapped IPv6: ::ffff:a.b.c.d  or  ::ffff:xxyy:zzww
+  const ffffMatch = /^::ffff:(.+)$/i.exec(h);
+  if (ffffMatch) {
+    const mapped = ffffMatch[1];
+    if (mapped.includes(".")) return mapped; // dotted-decimal embedded part
+    // hex-group form e.g. 7f00:0001
+    const hexGroup = /^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i.exec(mapped);
+    if (hexGroup) {
+      const hi = parseInt(hexGroup[1], 16);
+      const lo = parseInt(hexGroup[2], 16);
+      return `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+    }
+  }
+  // Single decimal integer  e.g. 2130706433 == 127.0.0.1
+  if (/^\d+$/.test(h)) {
+    const n = Number(h);
+    if (Number.isInteger(n) && n >= 0 && n <= 0xffffffff) {
+      return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
+    }
+  }
+  // Hex integer  e.g. 0x7f000001
+  if (/^0x[0-9a-f]+$/i.test(h)) {
+    const n = parseInt(h, 16);
+    if (n >= 0 && n <= 0xffffffff) {
+      return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
+    }
+  }
+  // Octal dotted notation  e.g. 0177.0.0.1
+  if (h.includes(".")) {
+    const parts = h.split(".");
+    if (parts.length === 4 && parts.some(p => /^0\d/.test(p))) {
+      const octets = parts.map(p => parseInt(p, p.startsWith("0") && p.length > 1 ? 8 : 10));
+      if (octets.every(o => !isNaN(o) && o >= 0 && o <= 255)) {
+        return octets.join(".");
+      }
+    }
+  }
+  return h;
+};
+
 /** Block loopback / link-local / private IP ranges to prevent SSRF */
-const isBlockedUrl = (rawUrl: string): boolean => {
+export const isBlockedUrl = (rawUrl: string): boolean => {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -93,7 +139,7 @@ const isBlockedUrl = (rawUrl: string): boolean => {
     return true; // unparseable → block
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") return true;
-  const h = url.hostname.toLowerCase().replace(/^\[|]$/g, ""); // strip IPv6 brackets
+  const h = resolveHostname(url.hostname.toLowerCase().replace(/^\[|]$/g, "")); // strip IPv6 brackets
   // localhost / loopback
   if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
   if (/^127\./.test(h)) return true;
@@ -143,7 +189,7 @@ export const buildApp = async (options: AppOptions = {}) => {
   const aiProvider =
     options.aiProvider ??
     new GeminiProvider({
-      apiKey: env.GEMINI_API_KEY,
+      getApiKey: () => env.GEMINI_API_KEY,
       model: env.GEMINI_MODEL,
       mockMode: env.MOCK_AI_MODE
     });
@@ -162,9 +208,10 @@ export const buildApp = async (options: AppOptions = {}) => {
       if (!origin || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
         cb(null, true);
       } else {
-        cb(new Error("CORS_NOT_ALLOWED"), false);
+        cb(null, false);
       }
-    }
+    },
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
 
   if (env.SERVE_WEB_FROM_SERVER) {
@@ -293,7 +340,7 @@ export const buildApp = async (options: AppOptions = {}) => {
     reply.send({
       localhostPort: body.localhostPort,
       defaultAiProvider: body.defaultAiProvider,
-      hasGeminiApiKey: Boolean(body.geminiApiKey ?? env.GEMINI_API_KEY),
+      hasGeminiApiKey: Boolean(env.GEMINI_API_KEY),
       geminiModel: body.geminiModel,
       pinchtabBaseUrl: body.pinchtabBaseUrl,
       debugMode: body.debugMode,
@@ -369,10 +416,17 @@ export const buildApp = async (options: AppOptions = {}) => {
 
   app.post("/api/reference-materials/import", async (request, reply) => {
     const body = referenceMaterialImportSchema.parse(request.body) as ReferenceMaterialImportInput;
-    const extractedText = await extractReferenceText(body, {
-      disableSsrfCheck: options.disableSsrfCheck,
-      allowedFileDir: options.allowedFileDir,
-    });
+    let extractedText: string;
+    try {
+      extractedText = await extractReferenceText(body, {
+        disableSsrfCheck: options.disableSsrfCheck,
+        allowedFileDir: options.allowedFileDir,
+      });
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "IMPORT_FAILED";
+      reply.code(400).send({ error: { code, message: error instanceof Error ? error.message : "取り込みに失敗" } });
+      return;
+    }
     const [material] = await db
       .insert(referenceMaterials)
       .values({
@@ -453,7 +507,7 @@ export const buildApp = async (options: AppOptions = {}) => {
     }
     const account = await db.select().from(noteAccounts).where(eq(noteAccounts.displayName, detail.noteAccountName)).limit(1);
     if (account.length === 0) {
-      reply.code(400).send({ error: { code: "ACCOUNT_NOT_FOUND", message: "noteアカウントが見つかりません" } });
+      reply.code(404).send({ error: { code: "ACCOUNT_NOT_FOUND", message: "noteアカウントが見つかりません" } });
       return;
     }
     const result = await noteSaveService.saveJob(id, {
