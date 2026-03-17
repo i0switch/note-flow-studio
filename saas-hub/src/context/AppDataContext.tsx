@@ -561,8 +561,18 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       stateRef.current.settings,
       providerId,
     ).catch(() => null);
+    const newContent = generated?.article
+      ? {
+          title: generated.article.title ?? target.title,
+          freeContent: generated.article.freeContent ?? target.freeContent,
+          paidContent: generated.article.paidContent ?? target.paidContent,
+          paidGuidance: generated.article.paidGuidance ?? target.paidGuidance,
+          body: generated.article.body ?? target.body,
+        }
+      : {};
     const updated = {
       ...target,
+      ...newContent,
       providerId: selectedProvider,
       timeline: [
         ...target.timeline,

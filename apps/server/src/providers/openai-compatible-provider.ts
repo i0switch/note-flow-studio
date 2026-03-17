@@ -58,11 +58,11 @@ export class OpenAICompatibleProvider implements AiProvider {
         body: JSON.stringify({
           model: this.options.model,
           messages: buildPromptMessages(input),
-          max_tokens: 16000,
+          max_tokens: 32000,
           // Qwen3 などの thinking モデルでは思考を無効化して速度優先
           enable_thinking: false,
         }),
-        signal: AbortSignal.timeout(180_000),
+        signal: AbortSignal.timeout(300_000),
       });
 
       if (!response.ok) {
@@ -85,7 +85,9 @@ export class OpenAICompatibleProvider implements AiProvider {
       }
 
       try {
-        return { ...buildArticle(input), ...(JSON.parse(match[0]) as Partial<BuiltArticle>) };
+        // 制御文字（タブ・改行以外）を除去してパース失敗を防ぐ
+        const sanitized = match[0].replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+        return { ...buildArticle(input), ...(JSON.parse(sanitized) as Partial<BuiltArticle>) };
       } catch (e) {
         throw new Error(`${this.options.providerName} API JSON パース失敗: ${e instanceof Error ? e.message : String(e)}`);
       }

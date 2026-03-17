@@ -574,7 +574,7 @@ export async function registerSaasHubAdapterRoutes(
     });
 
     // Poll until done
-    const TIMEOUT_MS = 180_000;
+    const TIMEOUT_MS = 300_000;
     const INTERVAL_MS = 500;
     const startedAt = Date.now();
 
@@ -625,18 +625,19 @@ export async function registerSaasHubAdapterRoutes(
     const body = request.body as { article: ArticleRecord; settings: AppSettings };
     const jobId = Number(body.article?.id);
 
-    if (!Number.isFinite(jobId) || jobId <= 0) {
-      reply.code(400).send({ error: { code: "INVALID_ID", message: "記事IDが無効です" } });
-      return;
-    }
-
-    const noteAccountId = Number(body.article.accountId);
-
     try {
-      const result = await noteSaveService.saveJob(jobId, {
-        noteAccountId: Number.isFinite(noteAccountId) ? noteAccountId : 1,
-        forceMethod: null,
+      // 常にリクエストボディのコンテンツを使用（プレビュー画面での直接編集を反映させるため）
+      const result = await noteSaveService.saveContextDirect({
+        jobId: Number.isFinite(jobId) && jobId > 0 ? jobId : 0,
+        title: body.article.title ?? "",
+        noteBody: body.article.body ?? "",
+        freePreviewMarkdown: body.article.freeContent ?? "",
+        paidContentMarkdown: body.article.paidContent ?? "",
+        salesMode: body.article.saleMode === "paid" ? "free_paid" : "normal",
+        targetState: "draft",
         applySaleSettings: body.article.saleMode === "paid",
+        priceYen: body.article.price ?? null,
+        transitionCtaText: body.article.paidGuidance ?? "",
       });
       reply.send({
         method: result.methodUsed,
@@ -658,18 +659,19 @@ export async function registerSaasHubAdapterRoutes(
     const body = request.body as { article: ArticleRecord; settings: AppSettings };
     const jobId = Number(body.article?.id);
 
-    if (!Number.isFinite(jobId) || jobId <= 0) {
-      reply.code(400).send({ error: { code: "INVALID_ID", message: "記事IDが無効です" } });
-      return;
-    }
-
-    const noteAccountId = Number(body.article.accountId);
-
     try {
-      const result = await noteSaveService.publishJob(jobId, {
-        noteAccountId: Number.isFinite(noteAccountId) ? noteAccountId : 1,
-        forceMethod: null,
+      // 常にリクエストボディのコンテンツを使用（プレビュー画面での直接編集を反映させるため）
+      const result = await noteSaveService.saveContextDirect({
+        jobId: Number.isFinite(jobId) && jobId > 0 ? jobId : 0,
+        title: body.article.title ?? "",
+        noteBody: body.article.body ?? "",
+        freePreviewMarkdown: body.article.freeContent ?? "",
+        paidContentMarkdown: body.article.paidContent ?? "",
+        salesMode: body.article.saleMode === "paid" ? "free_paid" : "normal",
+        targetState: "published",
         applySaleSettings: body.article.saleMode === "paid",
+        priceYen: body.article.price ?? null,
+        transitionCtaText: body.article.paidGuidance ?? "",
       });
       reply.send({
         method: result.methodUsed,
@@ -901,6 +903,75 @@ export async function registerSaasHubAdapterRoutes(
   app.get("/api/ai/providers/codex-cli/status", async (_request, reply) => {
     const summary = providerRegistry.getOne("codex_cli");
     reply.send({ status: summary });
+  });
+
+  // ---- POST /api/articles/regenerate-assets ----
+  app.post("/api/articles/regenerate-assets", async (request, reply) => {
+    const body = request.body as { article: ArticleRecord; settings: AppSettings; providerId?: ProviderId };
+    const { article } = body;
+
+    if (!article?.keyword) {
+      reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "article.keyword が必要です" } });
+      return;
+    }
+
+    // noteAccountId を解決
+    let noteAccountId = Number(article.accountId);
+    if (!Number.isFinite(noteAccountId) || noteAccountId <= 0) {
+      const [firstAccount] = await db.select().from(noteAccounts).limit(1);
+      if (!firstAccount) {
+        reply.code(400).send({ error: { code: "NO_ACCOUNT", message: "noteアカウントが存在しません" } });
+        return;
+      }
+      noteAccountId = firstAccount.id;
+    }
+
+    // promptTemplateId を解決
+    let promptTemplateId = Number(article.promptId);
+    if (!Number.isFinite(promptTemplateId) || promptTemplateId <= 0) {
+      const [firstTemplate] = await db.select().from(promptTemplates).limit(1);
+      promptTemplateId = firstTemplate?.id ?? 1;
+    }
+
+    const selectedProviderId = body.providerId ?? (article.providerId as ProviderId | undefined);
+    const aiProviderOverride =
+      selectedProviderId && selectedProviderId !== "gemini"
+        ? providerRegistry.createProvider(selectedProviderId) ?? undefined
+        : undefined;
+
+    const job = await generationService.createJob({
+      keyword: article.keyword,
+      noteAccountId,
+      promptTemplateId,
+      targetGenre: article.genre || undefined,
+      monetizationEnabled: article.saleMode === "paid",
+      salesMode: article.saleMode === "paid" ? "free_paid" : "normal",
+      desiredPriceYen: article.price ?? null,
+      additionalInstruction: article.instruction ?? "",
+      referenceMaterialIds: [],
+      aiProviderOverride,
+    });
+
+    const TIMEOUT_MS = 300_000;
+    const INTERVAL_MS = 500;
+    const startedAt = Date.now();
+    let jobDetail = await generationService.getJobDetail(job.id);
+    while (
+      jobDetail?.status !== "succeeded" &&
+      jobDetail?.status !== "failed" &&
+      Date.now() - startedAt < TIMEOUT_MS
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, INTERVAL_MS));
+      jobDetail = await generationService.getJobDetail(job.id);
+    }
+
+    const newArticle = await buildArticleRecord(db, job.id);
+    if (!newArticle) {
+      reply.code(500).send({ error: { code: "BUILD_FAILED", message: "再生成に失敗した" } });
+      return;
+    }
+
+    reply.send({ article: newArticle });
   });
 
   // ---- DELETE /api/articles/:id ----

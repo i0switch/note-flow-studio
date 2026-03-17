@@ -1,3 +1,4 @@
+import { ArticlePreviewDialog } from "@/components/ArticlePreviewDialog";
 import { PageWrapper } from "@/components/PageWrapper";
 import { StatusBadge, type StatusType } from "@/components/StatusBadge";
 import {
@@ -16,14 +17,15 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAppData } from "@/context/AppDataContext";
-import { ExternalLink, PenLine, Search, Trash2 } from "lucide-react";
+import type { ArticleRecord } from "@/lib/app-data";
+import { Eye, ExternalLink, PenLine, Search, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import { toast } from "sonner";
 
 export default function ArticlesPage() {
   const navigate = useNavigate();
-  const { state, deleteArticle, deleteArticles } = useAppData();
+  const { state, deleteArticle, deleteArticles, publishArticle, saveDraft, regenerateAssets, updateArticle } = useAppData();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [genreFilter, setGenreFilter] = useState("all");
@@ -33,6 +35,56 @@ export default function ArticlesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+
+  // プレビュー待機ダイアログ
+  const [previewingArticle, setPreviewingArticle] = useState<ArticleRecord | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
+  const handleRowClick = (article: ArticleRecord) => {
+    if (article.status === "preview_pending") {
+      setPreviewingArticle(article);
+    } else {
+      navigate(`/articles/${article.id}`);
+    }
+  };
+
+  const handlePreviewConfirm = async () => {
+    if (!previewingArticle) return;
+    const action = previewingArticle.pendingNoteAction ?? "draft";
+    setPreviewingArticle(null);
+    try {
+      navigate(`/articles/${previewingArticle.id}`);
+      if (action === "publish") {
+        const result = await publishArticle(previewingArticle.id);
+        toast.success(result?.noteUrl ? "note 公開した" : "公開キューに回した");
+      } else if (action === "draft") {
+        const result = await saveDraft(previewingArticle.id);
+        toast.success(result?.noteUrl ? "note 下書き保存した" : "下書き保存を開始した");
+      } else {
+        toast.success("予約投稿設定に回した");
+      }
+      updateArticle(previewingArticle.id, { pendingNoteAction: null });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+    }
+  };
+
+  const handlePreviewRegenerate = async (additionalPrompt: string) => {
+    if (!previewingArticle) return;
+    setIsRegenerating(true);
+    try {
+      if (additionalPrompt.trim()) {
+        const current = previewingArticle.instruction ?? "";
+        updateArticle(previewingArticle.id, {
+          instruction: current ? `${current}\n\n追加指示: ${additionalPrompt}` : additionalPrompt,
+        });
+      }
+      const updated = await regenerateAssets(previewingArticle.id);
+      if (updated) setPreviewingArticle(updated);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
 
   const filtered = state.articles.filter((article) => {
     if (search && !article.title.includes(search) && !article.keyword.includes(search)) return false;
@@ -121,6 +173,7 @@ export default function ArticlesPage() {
               <SelectItem value="all">すべての状態</SelectItem>
               <SelectItem value="generating">執筆中</SelectItem>
               <SelectItem value="completed">完了</SelectItem>
+              <SelectItem value="preview_pending">プレビュー待機</SelectItem>
               <SelectItem value="error">エラー</SelectItem>
             </SelectContent>
           </Select>
@@ -197,12 +250,19 @@ export default function ArticlesPage() {
                   key={article.id}
                   className="cursor-pointer transition-colors hover:bg-muted/30"
                   data-selected={selected.has(article.id)}
-                  onClick={() => navigate(`/articles/${article.id}`)}
+                  onClick={() => handleRowClick(article)}
                 >
                   <TableCell className="pl-4" onClick={(e) => { e.stopPropagation(); toggleOne(article.id); }}>
                     <Checkbox checked={selected.has(article.id)} aria-label="選択" />
                   </TableCell>
-                  <TableCell className="max-w-[300px] truncate text-sm font-medium">{article.title}</TableCell>
+                  <TableCell className="max-w-[300px] text-sm font-medium">
+                    <span className="flex items-center gap-1.5 truncate">
+                      {article.status === "preview_pending" && (
+                        <Eye className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      )}
+                      <span className="truncate">{article.title}</span>
+                    </span>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">{article.keyword}</TableCell>
                   <TableCell><StatusBadge status={article.status as StatusType} /></TableCell>
                   <TableCell><StatusBadge status={article.noteStatus as StatusType} /></TableCell>
@@ -232,6 +292,23 @@ export default function ArticlesPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* プレビュー待機ダイアログ */}
+      {previewingArticle && (
+        <ArticlePreviewDialog
+          open={true}
+          article={previewingArticle}
+          action={previewingArticle.pendingNoteAction ?? "draft"}
+          isRegenerating={isRegenerating}
+          onConfirm={() => void handlePreviewConfirm()}
+          onRegenerate={handlePreviewRegenerate}
+          onEdit={(patch) => {
+            updateArticle(previewingArticle.id, patch);
+            setPreviewingArticle((prev) => prev ? { ...prev, ...patch } : prev);
+          }}
+          onClose={() => setPreviewingArticle(null)}
+        />
+      )}
 
       {/* 単体削除 */}
       <AlertDialog open={confirmId !== null} onOpenChange={(open) => { if (!open) setConfirmId(null); }}>

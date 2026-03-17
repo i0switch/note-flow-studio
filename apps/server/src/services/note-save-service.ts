@@ -115,6 +115,29 @@ export class NoteSaveService {
     throw new Error("ALL_SAVE_METHODS_FAILED");
   }
 
+  /** DB 記録なし（旧フロー記事など）のコンテンツを直接保存する */
+  async saveContextDirect(
+    context: import("../adapters/note-save-adapters.js").SaveContext
+  ) {
+    const methods = ["unofficial_api", "playwright", "pinchtab"] as const;
+    for (const method of methods) {
+      const adapter = this.adapters.find((item) => item.method === method);
+      if (!adapter) continue;
+      try {
+        const result = await adapter.save(context);
+        return {
+          result: "success" as const,
+          methodUsed: result.method,
+          draftUrl: result.draftUrl,
+          saleSettingStatus: result.saleSettingStatus,
+        };
+      } catch {
+        // 次の adapter を試す
+      }
+    }
+    throw new Error("ALL_SAVE_METHODS_FAILED");
+  }
+
   async verifyAdapters() {
     return Promise.all(
       this.adapters.map(async (adapter) => ({

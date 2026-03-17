@@ -1,3 +1,4 @@
+import { ArticlePreviewDialog } from "@/components/ArticlePreviewDialog";
 import { PageWrapper } from "@/components/PageWrapper";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppData } from "@/context/AppDataContext";
-import { providerLabels, type ProviderId } from "@/lib/app-data";
+import { providerLabels, type ArticleRecord, type ProviderId } from "@/lib/app-data";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { CalendarClock, CalendarIcon, Globe, Paperclip, Plus, Save, Trash2 } from "lucide-react";
@@ -18,9 +19,10 @@ import { useNavigate } from "react-router-dom";
 
 export default function GeneratePage() {
   const navigate = useNavigate();
-  const { state, createReferenceMaterial, createGeneratedArticle, publishArticle, saveDraft } = useAppData();
+  const { state, createReferenceMaterial, createGeneratedArticle, publishArticle, saveDraft, regenerateAssets, updateArticle } = useAppData();
+  const genres = state.settings.genres?.length ? state.settings.genres : ["テクノロジー", "ビジネス", "ライフスタイル", "金融"];
   const [keyword, setKeyword] = useState("");
-  const [genre, setGenre] = useState("テクノロジー");
+  const [genre, setGenre] = useState(() => genres[0] ?? "テクノロジー");
   const [selectedAccount, setSelectedAccount] = useState(state.accounts[0]?.id ?? "");
   const [selectedPrompt, setSelectedPrompt] = useState(state.prompts[0]?.id ?? "");
   const [saleMode, setSaleMode] = useState<"paid" | "free">("paid");
@@ -40,6 +42,13 @@ export default function GeneratePage() {
   const [referenceUrls, setReferenceUrls] = useState<string[]>([]);
   const [referenceFiles, setReferenceFiles] = useState<{ name: string; content: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // プレビュー機能
+  const [showPreviewOnComplete, setShowPreviewOnComplete] = useState(false);
+  const [previewArticle, setPreviewArticle] = useState<Partial<ArticleRecord> | null>(null);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"publish" | "draft" | "schedule" | null>(null);
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   // タイマークリーンアップ
   useEffect(() => () => { if (progressTimerRef.current) clearInterval(progressTimerRef.current); }, []);
@@ -157,10 +166,19 @@ export default function GeneratePage() {
       });
       const resolvedArticle = await article;
 
-      // 生成完了 → note 保存フェーズ
+      // 生成完了
       if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
       setGenerationProgress(82);
       setGenerationStep("note に保存中...");
+
+      // プレビューONなら確認待ちへ（note 保存はプレビュー完了ボタン後）
+      if (showPreviewOnComplete) {
+        updateArticle(resolvedArticle.id, { status: "preview_pending", pendingNoteAction: action });
+        setPreviewArticle({ ...resolvedArticle, status: "preview_pending", pendingNoteAction: action });
+        setPendingAction(action);
+        setIsPreviewOpen(true);
+        return;
+      }
 
       navigate(`/articles/${resolvedArticle.id}`);
 
@@ -192,6 +210,61 @@ export default function GeneratePage() {
     }
   };
 
+  // プレビュー完了 → note 保存フェーズへ進む
+  const handlePreviewConfirm = async () => {
+    if (!previewArticle?.id || !pendingAction) return;
+    setIsPreviewOpen(false);
+    setSubmittingAction(pendingAction);
+    setGenerationProgress(82);
+    setGenerationStep("note に保存中...");
+    try {
+      navigate(`/articles/${previewArticle.id}`);
+      if (pendingAction === "publish") {
+        const result = await publishArticle(previewArticle.id);
+        setGenerationProgress(100);
+        setGenerationStep("完了！");
+        toast.success(result?.noteUrl ? "記事を生成して note 公開した" : "記事を生成して公開キューに回した");
+      } else if (pendingAction === "draft") {
+        const result = await saveDraft(previewArticle.id);
+        setGenerationProgress(100);
+        setGenerationStep("完了！");
+        toast.success(result?.noteUrl ? "記事を生成して note 下書き保存した" : "記事を生成して下書き保存を開始した");
+      } else {
+        setGenerationProgress(100);
+        setGenerationStep("完了！");
+        toast.success("記事を生成して予約投稿設定に回した");
+      }
+    } catch (error) {
+      setGenerationProgress(0);
+      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+    } finally {
+      setSubmittingAction(null);
+      if (previewArticle?.id) {
+        updateArticle(previewArticle.id, { pendingNoteAction: null });
+      }
+      setPreviewArticle(null);
+      setPendingAction(null);
+    }
+  };
+
+  // AIに再生成させる
+  const handlePreviewRegenerate = async (additionalPrompt: string) => {
+    if (!previewArticle?.id) return;
+    setIsRegenerating(true);
+    try {
+      if (additionalPrompt.trim()) {
+        const current = previewArticle.instruction ?? "";
+        updateArticle(previewArticle.id, {
+          instruction: current ? `${current}\n\n追加指示: ${additionalPrompt}` : additionalPrompt,
+        });
+      }
+      const updated = await regenerateAssets(previewArticle.id, useDefaultProvider ? undefined : selectedProvider);
+      if (updated) setPreviewArticle(updated);
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
   return (
     <PageWrapper title="生成" description="新規記事を作成します。">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -211,10 +284,9 @@ export default function GeneratePage() {
                 <Select value={genre} onValueChange={setGenre}>
                   <SelectTrigger><SelectValue placeholder="選択" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="テクノロジー">テクノロジー</SelectItem>
-                    <SelectItem value="ビジネス">ビジネス</SelectItem>
-                    <SelectItem value="ライフスタイル">ライフスタイル</SelectItem>
-                    <SelectItem value="金融">金融</SelectItem>
+                    {genres.map((g) => (
+                      <SelectItem key={g} value={g}>{g}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -289,6 +361,17 @@ export default function GeneratePage() {
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">補足指示</Label>
               <Textarea placeholder="追加の指示があれば入力..." rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border/60 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">生成完了後プレビューを表示する</p>
+                <p className="text-xs text-muted-foreground">公開処理の前に内容を確認・修正できる</p>
+              </div>
+              <Switch
+                data-testid="preview-toggle"
+                checked={showPreviewOnComplete}
+                onCheckedChange={setShowPreviewOnComplete}
+              />
             </div>
           </div>
 
@@ -405,40 +488,11 @@ export default function GeneratePage() {
             </Button>
           </div>
 
-          {submittingAction !== null && !hideProgress && (
-            <div className="card-elevated space-y-3 border-primary/30 bg-primary/5">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-foreground">{generationStep}</span>
-                <div className="flex items-center gap-3">
-                  <span className="tabular-nums text-muted-foreground">{generationProgress}%</span>
-                  <button
-                    type="button"
-                    onClick={() => setHideProgress(true)}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    バックグラウンドで待機
-                  </button>
-                </div>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-all duration-700 ease-out"
-                  style={{ width: `${generationProgress}%` }}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {generationProgress < 80
-                  ? "AI が記事を書いてる。最大 2〜3 分かかる場合があるよ..."
-                  : generationProgress < 100
-                  ? "note に保存中..."
-                  : "完了！画面が切り替わるよ"}
-              </p>
-            </div>
-          )}
         </div>
 
         <div className="lg:col-span-1">
-          <div className="card-elevated sticky top-18 space-y-4">
+          <div className="sticky top-18 space-y-4">
+          <div className="card-elevated space-y-4">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <span className="inline-block h-4 w-1 rounded-full bg-primary" />
               生成条件サマリー
@@ -472,8 +526,57 @@ export default function GeneratePage() {
               )}
             </div>
           </div>
+
+          {submittingAction !== null && !hideProgress && (
+            <div className="card-elevated space-y-3 border-primary/30 bg-primary/5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-medium text-foreground">{generationStep}</span>
+                <div className="flex items-center gap-3">
+                  <span className="tabular-nums text-muted-foreground">{generationProgress}%</span>
+                  <button
+                    type="button"
+                    onClick={() => setHideProgress(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    バックグラウンドで待機
+                  </button>
+                </div>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-all duration-700 ease-out"
+                  style={{ width: `${generationProgress}%` }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {generationProgress < 80
+                  ? "AI が記事を書いてる。最大 2〜3 分かかる場合があるよ..."
+                  : generationProgress < 100
+                  ? "note に保存中..."
+                  : "完了！画面が切り替わるよ"}
+              </p>
+            </div>
+          )}
+          </div>
         </div>
       </div>
+      {previewArticle && pendingAction && (
+        <ArticlePreviewDialog
+          open={isPreviewOpen}
+          article={previewArticle}
+          action={pendingAction}
+          isRegenerating={isRegenerating}
+          onConfirm={() => void handlePreviewConfirm()}
+          onRegenerate={handlePreviewRegenerate}
+          onEdit={(patch) => {
+            if (previewArticle?.id) updateArticle(previewArticle.id, patch);
+            setPreviewArticle((prev) => prev ? { ...prev, ...patch } : prev);
+          }}
+          onClose={() => {
+            setIsPreviewOpen(false);
+          }}
+        />
+      )}
     </PageWrapper>
   );
 }

@@ -452,6 +452,35 @@ class NoteBrowserAutomation {
     );
   }
 
+  /**
+   * エディタを開いて「有料エリア指定」ボタンをクリックし有料境界線を設定する。
+   * 成功時 true、失敗時 false を返す（例外は throw しない）。
+   */
+  async clickPaywallButton(page: Page, noteKey: string, separatorId: string): Promise<boolean> {
+    try {
+      await page.goto(`https://editor.note.com/notes/${noteKey}/edit/`, { waitUntil: "domcontentloaded" });
+      // エディタの初期化を待つ
+      await page.waitForTimeout(2000);
+
+      // 無料パート末尾ブロックにカーソルを置く
+      const separatorEl = page.locator(`[id="${separatorId}"]`).first();
+      const visible = await separatorEl.isVisible({ timeout: 5000 }).catch(() => false);
+      if (visible) {
+        await separatorEl.click();
+        await page.keyboard.press("End");
+      }
+
+      // 「有料エリア指定」ボタンをクリック
+      const btn = page.getByText("有料エリア指定", { exact: true }).first();
+      await btn.waitFor({ state: "visible", timeout: 10000 });
+      await btn.click();
+      await page.waitForTimeout(1000);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async save(page: Page, context: SaveContext, method: SaveResponse["method"]): Promise<SaveResponse> {
     await this.login(page);
     const api = await this.createApiClient(page);
@@ -463,26 +492,28 @@ class NoteBrowserAutomation {
 
       await api.saveDraft(note, context, structured);
 
+      const saleSettingRequested =
+        context.applySaleSettings &&
+        context.salesMode === "free_paid" &&
+        Boolean(structured.separator) &&
+        structured.paidHtml.length > 0;
+
       if (context.targetState === "draft") {
-        const saleApplied =
-          context.applySaleSettings &&
-          context.salesMode === "free_paid" &&
-          Boolean(structured.separator) &&
-          structured.paidHtml.length > 0;
+        // ドラフト保存APIはpaywall設定を無視するため、エディタUI操作で境界線を設定する
+        let saleSettingStatus: SaveResponse["saleSettingStatus"] = "not_required";
+        if (saleSettingRequested) {
+          const clicked = await this.clickPaywallButton(page, note.key, structured.separator!);
+          saleSettingStatus = clicked ? "applied" : "failed";
+        }
         return {
           method,
           draftUrl: `https://editor.note.com/notes/${note.key}/edit/`,
-          saleSettingStatus: saleApplied ? ("applied" as const) : ("not_required" as const)
+          saleSettingStatus
         };
       }
 
       const publishPayload = buildPublishPayload(note, context, structured);
       const published = await api.publishNote(note, publishPayload);
-      const saleSettingRequested =
-        context.applySaleSettings &&
-        context.salesMode === "free_paid" &&
-        structured.separator &&
-        structured.paidHtml.length > 0;
 
       return {
         method,

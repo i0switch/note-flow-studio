@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-export type StatusType = "generating" | "completed" | "error" | "saved" | "published" | "pending" | "running";
+export type StatusType = "generating" | "completed" | "error" | "saved" | "published" | "pending" | "running" | "preview_pending";
 
 const statusConfig: Record<StatusType, { label: string; className: string; dot: string }> = {
   generating: { label: "生成中", className: "status-badge-running", dot: "bg-primary animate-pulse" },
@@ -10,6 +10,7 @@ const statusConfig: Record<StatusType, { label: string; className: string; dot: 
   published: { label: "公開済み", className: "status-badge-success", dot: "bg-success" },
   pending: { label: "待機中", className: "status-badge-pending", dot: "bg-muted-foreground" },
   running: { label: "実行中", className: "status-badge-running", dot: "bg-primary animate-pulse" },
+  preview_pending: { label: "プレビュー待機", className: "status-badge bg-amber-500/15 text-amber-600 dark:text-amber-400", dot: "bg-amber-500 animate-pulse" },
 };
 
 interface StatusBadgeProps {

@@ -15,9 +15,10 @@ import {
   pollGitHubCopilotDeviceFlow,
   startGitHubCopilotDeviceFlow,
 } from "@/lib/note-api";
-import { Eye, EyeOff, Globe, Key, RefreshCw, Save, Trash2, UserPlus, WandSparkles } from "lucide-react";
+import { Eye, EyeOff, Globe, Key, Plus, RefreshCw, Save, Tag, Trash2, UserPlus, WandSparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { DEFAULT_GENRES } from "@/lib/app-data";
 
 const providerOrder: ProviderId[] = [
   "gemini",
@@ -96,6 +97,8 @@ export default function SettingsPage() {
   const [codexStatusText, setCodexStatusText] = useState("未確認");
   const [savingProvider, setSavingProvider] = useState<ProviderId | null>(null);
   const [testingProvider, setTestingProvider] = useState<ProviderId | null>(null);
+  const [genres, setGenres] = useState<string[]>(state.settings.genres?.length ? state.settings.genres : DEFAULT_GENRES);
+  const [newGenreInput, setNewGenreInput] = useState("");
 
   useEffect(() => {
     setLocalhostPort(String(state.settings.localhostPort));
@@ -114,6 +117,7 @@ export default function SettingsPage() {
     setProviderDrafts(
       Object.fromEntries(providerOrder.map((providerId) => [providerId, createDraft(providerId, state.settings)])) as Record<ProviderId, ProviderDraft>,
     );
+    setGenres(state.settings.genres?.length ? state.settings.genres : DEFAULT_GENRES);
   }, [state.settings]);
 
   const selectedProviderSummary = state.settings.providerSummaries[selectedProvider];
@@ -141,6 +145,19 @@ export default function SettingsPage() {
     }));
   };
 
+  const handleAddGenre = () => {
+    const trimmed = newGenreInput.trim();
+    if (!trimmed) return;
+    if (genres.includes(trimmed)) { toast.error("同じジャンルがすでにあるよ"); return; }
+    setGenres((prev) => [...prev, trimmed]);
+    setNewGenreInput("");
+  };
+
+  const handleRemoveGenre = (genre: string) => {
+    if (genres.length <= 1) { toast.error("ジャンルは1つ以上必要だよ"); return; }
+    setGenres((prev) => prev.filter((g) => g !== genre));
+  };
+
   const handleSaveBasic = () => {
     saveSettings({
       localhostPort: Number(localhostPort),
@@ -154,6 +171,7 @@ export default function SettingsPage() {
       fallbackProviders: fallbackOptions,
       strictProviderMode,
       generationTimeoutMs: Number(generationTimeoutMs),
+      genres,
     });
     toast.success("基本設定を保存しました");
   };
@@ -376,6 +394,48 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between">
               <span className="text-sm">PinchTab を Playwright より優先</span>
               <Switch checked={preferPinchTab} onCheckedChange={setPreferPinchTab} />
+            </div>
+          </div>
+
+          <div className="card-elevated max-w-2xl space-y-4">
+            <h2 className="flex items-center gap-2 text-sm font-semibold">
+              <span className="inline-block h-4 w-1 rounded-full bg-primary" />
+              記事ジャンル
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              生成画面のジャンル選択に表示される一覧を管理できるよ。
+            </p>
+            <div className="flex gap-2">
+              <Input
+                placeholder="例: マーケティング"
+                value={newGenreInput}
+                onChange={(e) => setNewGenreInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddGenre(); } }}
+                className="flex-1"
+              />
+              <Button type="button" size="sm" variant="outline" className="gap-1.5 shrink-0" onClick={handleAddGenre}>
+                <Plus className="h-3.5 w-3.5" />
+                追加
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {genres.map((genre) => (
+                <span
+                  key={genre}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-muted/40 px-3 py-1 text-sm"
+                >
+                  <Tag className="h-3 w-3 text-muted-foreground" />
+                  {genre}
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveGenre(genre)}
+                    className="ml-0.5 text-muted-foreground transition-colors hover:text-destructive"
+                    aria-label={`${genre}を削除`}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
             </div>
           </div>
 

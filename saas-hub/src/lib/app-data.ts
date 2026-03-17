@@ -1,4 +1,4 @@
-export type AppStatusType = "generating" | "completed" | "error" | "saved" | "published" | "pending" | "running";
+export type AppStatusType = "generating" | "completed" | "error" | "saved" | "published" | "pending" | "running" | "preview_pending";
 export type SaleMode = "free" | "paid";
 export type NoteMethod = "unofficial_api" | "playwright" | "pinchtab";
 export type SaleSettingStatus = "not_required" | "applied" | "failed";
@@ -85,6 +85,7 @@ export type ArticleRecord = {
   lastNoteMethod?: NoteMethod | null;
   saleSettingStatus?: SaleSettingStatus | null;
   lastError?: string | null;
+  pendingNoteAction?: "publish" | "draft" | "schedule" | null;
 };
 
 export type DiagnosticsRecord = {
@@ -112,6 +113,7 @@ export type AppSettings = {
   strictProviderMode: boolean;
   generationTimeoutMs: number;
   providerSummaries: Record<ProviderId, ProviderSummary>;
+  genres: string[];
 };
 
 export type AppDataState = {
@@ -298,6 +300,8 @@ export const defaultArticles: ArticleRecord[] = [
   },
 ];
 
+export const DEFAULT_GENRES = ["テクノロジー", "ビジネス", "ライフスタイル", "金融"];
+
 export const defaultSettings: AppSettings = {
   localhostPort: 3000,
   playwrightHeadless: true,
@@ -316,6 +320,7 @@ export const defaultSettings: AppSettings = {
   strictProviderMode: false,
   generationTimeoutMs: 90000,
   providerSummaries: createDefaultProviderSummaries(),
+  genres: DEFAULT_GENRES,
 };
 
 export const defaultState: AppDataState = {

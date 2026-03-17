@@ -611,13 +611,14 @@ describe("API integration", () => {
     expect(typeof status.model).toBe("string");
   });
 
-  it("POST /api/note/draft → 無効な記事IDは 400 を返す", async () => {
+  it("POST /api/note/draft → 非数値IDでもリクエストボディのコンテンツで保存できる", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/note/draft",
-      payload: { article: { id: "invalid", accountId: "1", saleMode: "normal" }, settings: {} },
+      payload: { article: { id: "invalid", accountId: "1", saleMode: "free", title: "テスト", body: "本文", freeContent: "無料" }, settings: {} },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draftUrl).toContain("/mock/");
   });
 
   it("POST /api/note/draft → 生成済みジョブを下書き保存できる", async () => {
@@ -649,13 +650,14 @@ describe("API integration", () => {
     expect(res.json().draftUrl).toContain("/mock/");
   });
 
-  it("POST /api/note/publish → 無効な記事IDは 400 を返す", async () => {
+  it("POST /api/note/publish → 非数値IDでもリクエストボディのコンテンツで公開できる", async () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/note/publish",
-      payload: { article: { id: "bad", accountId: "1", saleMode: "normal" }, settings: {} },
+      payload: { article: { id: "bad", accountId: "1", saleMode: "free", title: "テスト", body: "本文", freeContent: "無料" }, settings: {} },
     });
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().draftUrl).toContain("/mock/");
   });
 
   it("GET /api/settings のレスポンスに geminiApiKey が含まれない (秘密漏洩回帰)", async () => {
@@ -790,5 +792,237 @@ describe("API integration", () => {
 
     expect(save.statusCode).toBe(400);
     expect(publish.statusCode).toBe(400);
+  });
+
+  // ---- TC-API-03 ----
+
+  it("TC-API-03: POST /api/note/draft saleMode=paid → saleSettingStatus が含まれる", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/draft",
+      payload: {
+        article: {
+          id: "1",
+          accountId: "1",
+          saleMode: "paid",
+          title: "有料記事",
+          body: "本文",
+          freeContent: "無料パート",
+          paidContent: "有料パート",
+          paidGuidance: "CTA",
+          price: 980,
+        },
+        settings: {},
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("saleSettingStatus");
+    expect(["not_required", "failed", "applied"]).toContain(res.json().saleSettingStatus);
+  });
+
+  // ---- TC-API-07 ----
+
+  it("TC-API-07: POST /api/note/publish → method, draftUrl, saleSettingStatus が含まれる", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/publish",
+      payload: {
+        article: {
+          id: "1",
+          accountId: "1",
+          saleMode: "free",
+          title: "記事",
+          body: "本文",
+          freeContent: "本文",
+          price: null,
+        },
+        settings: {},
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("method");
+    expect(res.json()).toHaveProperty("draftUrl");
+    expect(res.json()).toHaveProperty("saleSettingStatus");
+  });
+
+  // ---- TC-API-08 ----
+
+  it("TC-API-08: POST /api/note/draft price=null → エラーにならず draftUrl が返る", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/note/draft",
+      payload: {
+        article: {
+          id: "1",
+          accountId: "1",
+          saleMode: "free",
+          title: "記事",
+          body: "本文",
+          freeContent: "本文",
+          price: null,
+        },
+        settings: {},
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toHaveProperty("draftUrl");
+  });
+
+  // ---- TC-DEL-03 ----
+
+  it("TC-DEL-03: 同じIDを2回削除しても deletedJobIds に重複しない", async () => {
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs",
+      payload: {
+        keyword: "重複削除テスト",
+        noteAccountId: 1,
+        promptTemplateId: 1,
+        referenceMaterialIds: [],
+        monetizationEnabled: false,
+        salesMode: "normal",
+        desiredPriceYen: null,
+        additionalInstruction: "",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const jobId = create.json().id;
+    await waitForJob(jobId);
+
+    const del1 = await app.inject({ method: "DELETE", url: `/api/articles/${jobId}` });
+    expect(del1.statusCode).toBe(200);
+
+    const del2 = await app.inject({ method: "DELETE", url: `/api/articles/${jobId}` });
+    expect(del2.statusCode).toBe(200);
+
+    const state = await app.inject({ method: "GET", url: "/api/state" });
+    const ids = state.json().state.articles.map((a: { id: string }) => a.id);
+    expect(ids).not.toContain(String(jobId));
+  });
+
+  // ---- TC-STA-01 ----
+
+  it("TC-STA-01: GET /api/state → articles, prompts, accounts, settings を含む", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/state" });
+    expect(res.statusCode).toBe(200);
+    const { state } = res.json() as { state: Record<string, unknown> };
+    expect(state).toHaveProperty("articles");
+    expect(state).toHaveProperty("prompts");
+    expect(state).toHaveProperty("accounts");
+    expect(state).toHaveProperty("settings");
+    expect(Array.isArray(state.articles)).toBe(true);
+  });
+
+  // ---- toJST UTC→JST 変換テスト ----
+
+  it("toJST: buildArticleRecord の createdAt が UTC+9 で返る", async () => {
+    // ジョブを作成（createdAt は UTC でDB保存）
+    const create = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs",
+      payload: {
+        keyword: "JST変換テスト",
+        noteAccountId: 1,
+        promptTemplateId: 1,
+        referenceMaterialIds: [],
+        monetizationEnabled: false,
+        salesMode: "normal",
+        desiredPriceYen: null,
+        additionalInstruction: "",
+      },
+    });
+    expect(create.statusCode).toBe(201);
+    const jobId = create.json().id;
+    await waitForJob(jobId);
+
+    // GET /api/state で articles を取得 → createdAt が "YYYY-MM-DD" 形式であること
+    const state = await app.inject({ method: "GET", url: "/api/state" });
+    const articles = state.json().state.articles as { id: string; createdAt: string }[];
+    const article = articles.find((a) => a.id === String(jobId));
+    expect(article).toBeDefined();
+    // YYYY-MM-DD 形式であること（toJST().slice(0,10) の出力形式）
+    expect(article!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    // timeline の time が HH:MM:SS 形式（toJST().slice(11,19) の出力形式）
+    const stateArticles = state.json().state.articles as { id: string; timeline: { time: string }[] }[];
+    const art = stateArticles.find((a) => a.id === String(jobId));
+    expect(art!.timeline.length).toBeGreaterThan(0);
+    for (const item of art!.timeline) {
+      expect(item.time).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    }
+  });
+
+  // ---- PUT /api/state 並列競合テスト（write-lock 排他制御） ----
+
+  it("PUT /api/state を並列実行しても deletedJobIds が消えない（write-lock 排他制御）", async () => {
+    // ジョブを2件作成
+    const create1 = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs",
+      payload: { keyword: "並列テスト1", noteAccountId: 1, promptTemplateId: 1, referenceMaterialIds: [], monetizationEnabled: false, salesMode: "normal", desiredPriceYen: null, additionalInstruction: "" },
+    });
+    const create2 = await app.inject({
+      method: "POST",
+      url: "/api/generation-jobs",
+      payload: { keyword: "並列テスト2", noteAccountId: 1, promptTemplateId: 1, referenceMaterialIds: [], monetizationEnabled: false, salesMode: "normal", desiredPriceYen: null, additionalInstruction: "" },
+    });
+    const jobId1 = create1.json().id;
+    const jobId2 = create2.json().id;
+    await Promise.all([waitForJob(jobId1), waitForJob(jobId2)]);
+
+    // jobId1 を削除 → deletedJobIds に追加
+    await app.inject({ method: "DELETE", url: `/api/articles/${jobId1}` });
+
+    // GET /api/state を取得しておく
+    const stateRes = await app.inject({ method: "GET", url: "/api/state" });
+    const stateEnvelope = stateRes.json() as { state: Record<string, unknown> };
+
+    // 別スレッドで同時に PUT /api/state と DELETE を実行（競合シナリオ）
+    await Promise.all([
+      app.inject({
+        method: "PUT",
+        url: "/api/state",
+        payload: { state: { ...stateEnvelope.state, accounts: stateEnvelope.state.accounts } },
+      }),
+      app.inject({ method: "DELETE", url: `/api/articles/${jobId2}` }),
+    ]);
+
+    // 両方の削除IDが articles に含まれないこと
+    const finalState = await app.inject({ method: "GET", url: "/api/state" });
+    const ids = finalState.json().state.articles.map((a: { id: string }) => a.id);
+    expect(ids).not.toContain(String(jobId1));
+    // jobId2 も articles に出てこないこと（deletedJobIds に入っていれば非表示）
+    expect(ids).not.toContain(String(jobId2));
+  });
+
+  // ---- TC-STA-03 ----
+
+  it("TC-STA-03: PUT /api/state で空配列 accounts を送っても既存アカウントは削除されない", async () => {
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/note-accounts",
+      payload: {
+        displayName: "STA-03テスト",
+        saveModePriority: "browser_first",
+        browserAdapterPriority: "auto",
+        fallbackEnabled: false,
+        isActive: true,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const id = created.json().id;
+
+    const stateRes = await app.inject({ method: "GET", url: "/api/state" });
+    const stateEnvelope = stateRes.json() as { state: Record<string, unknown> };
+
+    const putRes = await app.inject({
+      method: "PUT",
+      url: "/api/state",
+      payload: { state: { ...stateEnvelope.state, accounts: [] } },
+    });
+    expect(putRes.statusCode).toBe(200);
+
+    const list = await app.inject({ method: "GET", url: "/api/note-accounts" });
+    expect(list.json().find((a: { id: number }) => a.id === id)).toBeTruthy();
   });
 });

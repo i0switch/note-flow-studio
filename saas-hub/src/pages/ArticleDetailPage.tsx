@@ -115,7 +115,11 @@ export default function ArticleDetailPage() {
                 {article.providerId ? <p>生成 provider: {providerLabels[article.providerId]}</p> : null}
                 {article.lastNoteMethod ? <p>保存経路: {article.lastNoteMethod}</p> : null}
                 {article.noteUrl ? <p>note URL: {article.noteUrl}</p> : null}
-                {article.lastError ? <p className="text-destructive">直近エラー: {article.lastError}</p> : null}
+                {article.lastError && article.noteStatus !== "running" && article.noteStatus !== "pending" ? (
+                  <p className="text-destructive">直近エラー: {article.lastError}</p>
+                ) : article.noteStatus === "running" ? (
+                  <p className="text-muted-foreground">処理中...</p>
+                ) : null}
               </div>
             )}
           </div>
