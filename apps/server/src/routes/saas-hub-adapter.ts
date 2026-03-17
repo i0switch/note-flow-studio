@@ -350,10 +350,9 @@ export async function registerSaasHubAdapterRoutes(
         }
       }
       // Delete DB accounts that are no longer in the state
+      // 空配列の場合は削除しない（未ロード状態と区別できないため）
       if (incomingAccountNames.length > 0) {
         await db.delete(noteAccounts).where(notInArray(noteAccounts.displayName, incomingAccountNames));
-      } else {
-        await db.delete(noteAccounts);
       }
 
       // Upsert prompts by name (Bug #3: null-safe, Bug #7: UPDATE ロジック追加)

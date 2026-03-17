@@ -151,7 +151,7 @@ describe("マークダウン→HTML変換", () => {
 });
 
 describe("note-save-adapters helpers", () => {
-  it("free_paid のとき無料部分と有料部分を分割して separator を作る", () => {
+  it("free_paid のとき無料部分と有料部分を分割して separator を作る (published)", () => {
     const structured = buildStructuredNoteContent(baseContext);
 
     expect(structured.freeHtml).toContain("導入");
@@ -159,6 +159,52 @@ describe("note-save-adapters helpers", () => {
     expect(structured.separator).toBeTruthy();
     expect(structured.fullHtml).toContain(structured.freeHtml);
     expect(structured.fullHtml).toContain(structured.paidHtml);
+  });
+
+  it("free_paid + draft でも separator を生成する（下書き時も仕切り線が挿入される）", () => {
+    const structured = buildStructuredNoteContent({
+      ...baseContext,
+      targetState: "draft"
+    });
+
+    expect(structured.freeHtml).toContain("導入");
+    expect(structured.paidHtml).toContain("ここから本編");
+    expect(structured.separator).toBeTruthy();
+    expect(structured.fullHtml).toContain(structured.freeHtml);
+    expect(structured.fullHtml).toContain(structured.paidHtml);
+  });
+
+  it("free_paid + draft の separator は freeHtml 末尾ブロックの id と一致する", () => {
+    const structured = buildStructuredNoteContent({
+      ...baseContext,
+      targetState: "draft"
+    });
+
+    // separator は freeHtml 内の最後のブロック id のはず
+    expect(structured.freeHtml).toContain(structured.separator!);
+  });
+
+  it("applySaleSettings=false なら draft でも separator は null", () => {
+    const structured = buildStructuredNoteContent({
+      ...baseContext,
+      targetState: "draft",
+      applySaleSettings: false
+    });
+
+    expect(structured.separator).toBeNull();
+    expect(structured.paidHtml).toBe("");
+    expect(structured.freeHtml).toBe(structured.fullHtml);
+  });
+
+  it("paidContentMarkdown が空なら draft でも separator は null", () => {
+    const structured = buildStructuredNoteContent({
+      ...baseContext,
+      targetState: "draft",
+      paidContentMarkdown: ""
+    });
+
+    expect(structured.separator).toBeNull();
+    expect(structured.paidHtml).toBe("");
   });
 
   it("通常モードでは全文を無料本文として扱う", () => {
@@ -192,5 +238,20 @@ describe("note-save-adapters helpers", () => {
     expect(payload.separator).toBe(structured.separator);
     expect(payload.pay_body).toBe(structured.paidHtml);
     expect(payload.free_body).toBe(structured.freeHtml);
+  });
+
+  it("draft context から作った structured を publishPayload に使っても price/separator が正しく入る", () => {
+    const draftContext = { ...baseContext, targetState: "draft" as const };
+    const structured = buildStructuredNoteContent(draftContext);
+    const payload = buildPublishPayload(
+      { id: 2, key: "n456", slug: "slug-n456" },
+      draftContext,
+      structured
+    );
+
+    expect(payload.price).toBe(980);
+    expect(payload.separator).toBe(structured.separator);
+    expect(payload.limited).toBe(true);
+    expect(payload.pay_body).toBe(structured.paidHtml);
   });
 });

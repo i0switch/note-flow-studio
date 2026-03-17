@@ -499,6 +499,7 @@ describe("API integration", () => {
   });
 
   it("PUT /api/state でアカウントを除外するとDBから削除される", async () => {
+    // 削除対象アカウントを作成
     const created = await app.inject({
       method: "POST",
       url: "/api/note-accounts",
@@ -513,22 +514,40 @@ describe("API integration", () => {
     expect(created.statusCode).toBe(201);
     const id = created.json().id;
 
-    const currentState = await app.inject({ method: "GET", url: "/api/state" });
-    const stateBody = currentState.json();
+    // 保持するアカウントを別途作成（空配列は未ロード扱いで削除されないため）
+    const kept = await app.inject({
+      method: "POST",
+      url: "/api/note-accounts",
+      payload: {
+        displayName: "保持テスト",
+        saveModePriority: "browser_first",
+        browserAdapterPriority: "auto",
+        fallbackEnabled: false,
+        isActive: true
+      }
+    });
+    expect(kept.statusCode).toBe(201);
 
+    // GET /api/state → { state: { accounts: [...], ... }, providers: [...] }
+    const currentState = await app.inject({ method: "GET", url: "/api/state" });
+    const stateEnvelope = currentState.json() as { state: { accounts: { name: string }[] } };
+    const existingAccounts = stateEnvelope.state.accounts ?? [];
+
+    // "削除テスト" を除いた accounts リストで PUT → 削除テストのみ消える
     await app.inject({
       method: "PUT",
       url: "/api/state",
       payload: {
         state: {
-          ...stateBody,
-          accounts: []
+          ...stateEnvelope.state,
+          accounts: existingAccounts.filter((a) => a.name !== "削除テスト")
         }
       }
     });
 
     const list = await app.inject({ method: "GET", url: "/api/note-accounts" });
     expect(list.json().find((a: { id: number }) => a.id === id)).toBeUndefined();
+    expect(list.json().find((a: { displayName: string }) => a.displayName === "保持テスト")).toBeTruthy();
   });
 
   it("diagnostics/run が playwright-browser と node を含む", async () => {

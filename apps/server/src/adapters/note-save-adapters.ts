@@ -215,7 +215,6 @@ const buildParagraphs = (value: string, seed: string) =>
 
 export const buildStructuredNoteContent = (context: SaveContext): StructuredNoteContent => {
   const saleSettingRequested =
-    context.targetState === "published" &&
     context.applySaleSettings &&
     context.salesMode === "free_paid" &&
     context.paidContentMarkdown.trim().length > 0;
@@ -372,17 +371,31 @@ class NoteApiClient {
   }
 
   async saveDraft(note: NoteIdentity, context: SaveContext, structured: StructuredNoteContent) {
+    const saleSettingRequested =
+      context.applySaleSettings &&
+      context.salesMode === "free_paid" &&
+      Boolean(structured.separator) &&
+      structured.paidHtml.length > 0;
+
+    const payload: Record<string, unknown> = {
+      body: structured.fullHtml,
+      body_length: structured.bodyLength,
+      name: context.title,
+      index: false,
+      is_lead_form: false
+    };
+
+    if (saleSettingRequested) {
+      payload.free_body = structured.freeHtml;
+      payload.pay_body = structured.paidHtml;
+      payload.separator = structured.separator;
+      payload.limited = true;
+      payload.price = context.priceYen ?? 300;
+    }
+
     const response = await this.api.post(
       `https://note.com/api/v1/text_notes/draft_save?id=${note.id}&is_temp_saved=true`,
-      {
-        data: {
-          body: structured.fullHtml,
-          body_length: structured.bodyLength,
-          name: context.title,
-          index: false,
-          is_lead_form: false
-        }
-      }
+      { data: payload }
     );
     if (!response.ok()) {
       throw new Error(`NOTE_DRAFT_SAVE_FAILED_${response.status()}`);
@@ -451,10 +464,15 @@ class NoteBrowserAutomation {
       await api.saveDraft(note, context, structured);
 
       if (context.targetState === "draft") {
+        const saleApplied =
+          context.applySaleSettings &&
+          context.salesMode === "free_paid" &&
+          Boolean(structured.separator) &&
+          structured.paidHtml.length > 0;
         return {
           method,
           draftUrl: `https://editor.note.com/notes/${note.key}/edit/`,
-          saleSettingStatus: "not_required"
+          saleSettingStatus: saleApplied ? ("applied" as const) : ("not_required" as const)
         };
       }
 
