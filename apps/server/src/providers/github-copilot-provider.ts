@@ -97,8 +97,7 @@ export class GitHubCopilotProvider implements AiProvider {
   }
 
   private async saveAuth(auth: CopilotAuth): Promise<void> {
-    const state = (await this.options.stateService.load()) ?? {};
-    await this.options.stateService.save({ ...state, githubCopilotAuth: auth });
+    await this.options.stateService.updateSidecar((state) => ({ ...state, githubCopilotAuth: auth }));
   }
 
   private async getValidCopilotToken(): Promise<string | null> {
@@ -213,9 +212,10 @@ export class GitHubCopilotProvider implements AiProvider {
   }
 
   async disconnect(): Promise<void> {
-    const state = (await this.options.stateService.load()) ?? {};
-    const { githubCopilotAuth: _removed, ...rest } = state as Record<string, unknown>;
-    await this.options.stateService.save(rest);
+    await this.options.stateService.updateSidecar((state) => {
+      const { githubCopilotAuth: _removed, ...rest } = state;
+      return rest;
+    });
   }
 
   async generateArticle(input: ArticleGenerationRequest): Promise<BuiltArticle> {

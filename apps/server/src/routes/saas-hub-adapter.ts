@@ -24,8 +24,8 @@ import type { NoteSaveService } from "../services/note-save-service.js";
 import type { SaasHubStateService } from "../services/saas-hub-state-service.js";
 import type { ProviderRegistry, ProviderId, ProviderSummary } from "../services/provider-registry.js";
 import fs from "node:fs/promises";
-import { captureSession, getDependencyChecks, installPlaywrightBrowser } from "../setup/setup-service.js";
-import { resolveDataPath } from "../config.js";
+import { captureSession, getDependencyChecks, installPlaywrightBrowser, saveSetupConfig } from "../setup/setup-service.js";
+import { env, resolveDataPath } from "../config.js";
 
 // ---- UTC → JST 変換ヘルパー ----
 const toJST = (isoString: string) => {
@@ -623,6 +623,10 @@ export async function registerSaasHubAdapterRoutes(
   // ---- POST /api/note/draft ----
   app.post("/api/note/draft", async (request, reply) => {
     const body = request.body as { article: ArticleRecord; settings: AppSettings };
+    if (!body?.article) {
+      reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "article が必要です" } });
+      return;
+    }
     const jobId = Number(body.article?.id);
 
     try {
@@ -657,6 +661,10 @@ export async function registerSaasHubAdapterRoutes(
   // ---- POST /api/note/publish ----
   app.post("/api/note/publish", async (request, reply) => {
     const body = request.body as { article: ArticleRecord; settings: AppSettings };
+    if (!body?.article) {
+      reply.code(400).send({ error: { code: "INVALID_REQUEST", message: "article が必要です" } });
+      return;
+    }
     const jobId = Number(body.article?.id);
 
     try {
@@ -723,6 +731,16 @@ export async function registerSaasHubAdapterRoutes(
       },
       patch.apiKey,
     );
+
+    // APIキーが保存されたら ENABLE_REAL_NOTE_AUTOMATION=true を .env に書き込む
+    if (patch.apiKey && !env.ENABLE_REAL_NOTE_AUTOMATION) {
+      await saveSetupConfig(db, {
+        geminiApiKey: env.GEMINI_API_KEY ?? "",
+        geminiModel: env.GEMINI_MODEL,
+        localhostPort: env.APP_PORT,
+        playwrightHeadless: env.PLAYWRIGHT_HEADLESS,
+      }).catch((err) => console.warn("saveSetupConfig failed:", err));
+    }
 
     reply.send({ provider: updated });
   });

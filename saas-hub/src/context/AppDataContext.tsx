@@ -387,22 +387,26 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     },
   ) => {
     const label = targetState === "published" ? "note 公開" : "note 下書き保存";
+    const isMock = payload.noteUrl.includes("note.com/mock/");
+    const timeline = [
+      ...article.timeline,
+      {
+        label: isMock ? `${label}（モックモード）` : label,
+        time: new Date().toLocaleTimeString("ja-JP"),
+        status: isMock ? ("error" as const) : ("success" as const),
+        detail: isMock
+          ? "セットアップが未完了のためモックURLが返りました。設定ページでnoteアカウント情報を保存してください。"
+          : `${payload.method} / sale=${payload.saleSettingStatus}`,
+      },
+    ];
     return replaceArticle({
       ...article,
-      noteStatus: targetState === "published" ? "published" : "saved",
+      noteStatus: isMock ? "error" : targetState === "published" ? "published" : "saved",
       noteUrl: payload.noteUrl,
       lastNoteMethod: payload.method,
       saleSettingStatus: payload.saleSettingStatus,
-      lastError: null,
-      timeline: [
-        ...article.timeline,
-        {
-          label,
-          time: new Date().toLocaleTimeString("ja-JP"),
-          status: "success",
-          detail: `${payload.method} / sale=${payload.saleSettingStatus}`,
-        },
-      ],
+      lastError: isMock ? "モックモード: セットアップを完了してください" : null,
+      timeline,
     });
   };
 

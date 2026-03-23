@@ -287,11 +287,10 @@ export class ProviderRegistry {
   }
 
   private async persistSummaries(): Promise<void> {
-    const state = (await this.stateService.load()) ?? {};
-    await this.stateService.save({
+    await this.stateService.updateSidecar((state) => ({
       ...state,
       providerSummaries: this.summaries,
       providerConfigs: this.providerConfigs,
-    });
+    }));
   }
 }

@@ -36,8 +36,12 @@ const main = async () => {
   await fs.rm(path.join(releaseDir, "data"), { recursive: true, force: true });
   await fs.mkdir(path.join(releaseDir, "data"), { recursive: true });
 
+  const nodeBin = process.platform === "win32"
+    ? path.join(releaseDir, "runtime", "node.exe")
+    : path.join(releaseDir, "runtime", "bin", "node");
+
   const server = spawn(
-    path.join(releaseDir, "runtime", "node.exe"),
+    nodeBin,
     [path.join(releaseDir, "apps", "server", "dist", "apps", "server", "src", "server.js")],
     {
       cwd: releaseDir,

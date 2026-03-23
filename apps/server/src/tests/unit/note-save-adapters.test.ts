@@ -295,7 +295,7 @@ describe("有料境界線ボタン（clickPaywallButton）", () => {
   });
 
   it("salesMode=normal → 境界線設定は不要と判定される", () => {
-    const ctx = { ...baseContext, salesMode: "normal" as const, applySaleSettings: false };
+    const ctx = { ...baseContext, salesMode: "normal" as "normal" | "free_paid", applySaleSettings: false };
     const structured = buildStructuredNoteContent(ctx);
     const shouldSetPaywall =
       ctx.applySaleSettings &&

@@ -177,12 +177,19 @@ export const saveSetupConfig = async (db: AppDatabase, input: SetupSaveInput) =>
 
 export const findPlaywrightCli = async () => {
   // 1. Check relative to current working directory (dev mode / root)
+  // 2. Check relative to APP_DATA_DIR parent (portable distribution: data/ is inside <portable>/)
+  const appRootFromData = path.resolve(env.APP_DATA_DIR, "..");
+  const fileDir = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([a-z]:)/i, "$1");
   const paths = [
     path.resolve(process.cwd(), "node_modules/playwright/cli.js"),
     path.resolve(process.cwd(), "../../node_modules/playwright/cli.js"), // workspace parent
     path.resolve(process.cwd(), "apps/server/node_modules/playwright/cli.js"),
-    // 2. Check relative to the current file's location (bundled / portable)
-    path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../node_modules/playwright/cli.js")
+    // APP_DATA_DIR の親がポータブルルート（最も信頼性が高い）
+    path.resolve(appRootFromData, "node_modules/playwright/cli.js"),
+    // dist構造: <portable>/apps/server/dist/apps/server/src/setup/setup-service.js → 6階層上がルート
+    path.resolve(fileDir, "../../../../../../node_modules/playwright/cli.js"),
+    // dev構造: apps/server/src/setup/setup-service.ts → 4階層上がルート
+    path.resolve(fileDir, "../../../../node_modules/playwright/cli.js")
   ];
 
   for (const p of paths) {

@@ -17,6 +17,18 @@ import { Calendar } from "@/components/ui/calendar";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
+const toFriendlyError = (error: unknown): string => {
+  const msg = error instanceof Error ? error.message : String(error);
+  const map: Record<string, string> = {
+    ALL_SAVE_METHODS_FAILED: "note への保存に失敗しました。設定ページで Playwright セッションを取得するか、非公式 API URL を設定してください。",
+    NOTE_UNOFFICIAL_API_NOT_CONFIGURED: "note 非公式 API URL が設定されていません。設定ページで入力してください。",
+    ACCOUNT_NOT_FOUND: "note アカウントが見つかりません。設定ページでアカウントを追加してください。",
+    JOB_NOT_FOUND: "生成ジョブが見つかりません。もう一度生成してください。",
+    ARTICLE_NOT_READY: "記事データがまだ準備できていません。しばらく待ってから再試行してください。",
+  };
+  return map[msg] ?? msg;
+};
+
 export default function GeneratePage() {
   const navigate = useNavigate();
   const { state, createReferenceMaterial, createGeneratedArticle, publishArticle, saveDraft, regenerateAssets, updateArticle } = useAppData();
@@ -52,6 +64,19 @@ export default function GeneratePage() {
 
   // タイマークリーンアップ
   useEffect(() => () => { if (progressTimerRef.current) clearInterval(progressTimerRef.current); }, []);
+
+  // マウント時に preview_pending の記事があればプレビューダイアログを自動で開く
+  useEffect(() => {
+    const pendingArticle = [...(state.articles ?? [])]
+      .filter((a) => a.status === "preview_pending")
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    if (pendingArticle) {
+      setPreviewArticle(pendingArticle);
+      setPendingAction(pendingArticle.pendingNoteAction ?? null);
+      setIsPreviewOpen(true);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const selectedAccountName = state.accounts.find((account) => account.id === selectedAccount)?.name ?? "未選択";
   const selectedPromptName = state.prompts.find((prompt) => prompt.id === selectedPrompt)?.title ?? "未選択";
@@ -173,6 +198,9 @@ export default function GeneratePage() {
 
       // プレビューONなら確認待ちへ（note 保存はプレビュー完了ボタン後）
       if (showPreviewOnComplete) {
+        if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+        setGenerationProgress(100);
+        setHideProgress(true);
         updateArticle(resolvedArticle.id, { status: "preview_pending", pendingNoteAction: action });
         setPreviewArticle({ ...resolvedArticle, status: "preview_pending", pendingNoteAction: action });
         setPendingAction(action);
@@ -186,7 +214,12 @@ export default function GeneratePage() {
         const result = await publishArticle(resolvedArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
-        toast.success(result?.noteUrl ? "記事を生成して note 公開した" : "記事を生成して公開キューに回した");
+        if (result?.noteUrl) {
+          window.open(result.noteUrl, "_blank", "noopener,noreferrer");
+          toast.success("note 公開完了！タブで開いたよ");
+        } else {
+          toast.success("記事を生成して公開キューに回した");
+        }
         return;
       }
 
@@ -194,7 +227,12 @@ export default function GeneratePage() {
         const result = await saveDraft(resolvedArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
-        toast.success(result?.noteUrl ? "記事を生成して note 下書き保存した" : "記事を生成して下書き保存を開始した");
+        if (result?.noteUrl) {
+          window.open(result.noteUrl, "_blank", "noopener,noreferrer");
+          toast.success("下書き保存完了！タブで開いたよ");
+        } else {
+          toast.success("記事を生成して下書き保存を開始した");
+        }
         return;
       }
 
@@ -204,7 +242,7 @@ export default function GeneratePage() {
     } catch (error) {
       if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
       setGenerationProgress(0);
-      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+      toast.error(toFriendlyError(error));
     } finally {
       setSubmittingAction(null);
     }
@@ -223,12 +261,22 @@ export default function GeneratePage() {
         const result = await publishArticle(previewArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
-        toast.success(result?.noteUrl ? "記事を生成して note 公開した" : "記事を生成して公開キューに回した");
+        if (result?.noteUrl) {
+          window.open(result.noteUrl, "_blank", "noopener,noreferrer");
+          toast.success("note 公開完了！タブで開いたよ");
+        } else {
+          toast.success("記事を生成して公開キューに回した");
+        }
       } else if (pendingAction === "draft") {
         const result = await saveDraft(previewArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
-        toast.success(result?.noteUrl ? "記事を生成して note 下書き保存した" : "記事を生成して下書き保存を開始した");
+        if (result?.noteUrl) {
+          window.open(result.noteUrl, "_blank", "noopener,noreferrer");
+          toast.success("下書き保存完了！タブで開いたよ");
+        } else {
+          toast.success("記事を生成して下書き保存を開始した");
+        }
       } else {
         setGenerationProgress(100);
         setGenerationStep("完了！");
@@ -236,7 +284,7 @@ export default function GeneratePage() {
       }
     } catch (error) {
       setGenerationProgress(0);
-      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+      toast.error(toFriendlyError(error));
     } finally {
       setSubmittingAction(null);
       if (previewArticle?.id) {

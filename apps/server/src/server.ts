@@ -11,5 +11,7 @@ if (env.OPEN_BROWSER_ON_START) {
   const platform = process.platform;
   if (platform === "win32") {
     execFile("cmd", ["/c", "start", "", url]);
+  } else if (platform === "darwin") {
+    execFile("open", [url]);
   }
 }

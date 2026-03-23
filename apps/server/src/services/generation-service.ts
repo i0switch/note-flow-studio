@@ -69,20 +69,27 @@ export class GenerationService {
 
   private async processQueue() {
     this.processing = true;
-    while (this.queue.length > 0) {
-      const jobId = this.queue.shift();
-      if (!jobId) continue;
-      try {
-        await this.processJob(jobId);
-      } catch (error) {
-        await this.db
-          .update(generationJobs)
-          .set({ status: "failed", updatedAt: now() })
-          .where(eq(generationJobs.id, jobId));
-        await this.log(jobId, "error", "article", error instanceof Error ? error.message : "記事生成失敗");
+    try {
+      while (this.queue.length > 0) {
+        const jobId = this.queue.shift();
+        if (!jobId) continue;
+        try {
+          await this.processJob(jobId);
+        } catch (error) {
+          try {
+            await this.db
+              .update(generationJobs)
+              .set({ status: "failed", updatedAt: now() })
+              .where(eq(generationJobs.id, jobId));
+            await this.log(jobId, "error", "article", error instanceof Error ? error.message : "記事生成失敗");
+          } catch {
+            // secondary error は無視（processing フラグを必ず解放する）
+          }
+        }
       }
+    } finally {
+      this.processing = false;
     }
-    this.processing = false;
   }
 
   async processJob(jobId: number) {
