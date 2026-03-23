@@ -313,13 +313,34 @@ export const buildPublishPayload = (
   };
 };
 
-const requireNoteSession = async () => {
-  const sessionPath = resolveDataPath("note-storage-state.json");
+/** note-storage-state.json → fallback to note-session-*.json の順で最初に見つかったパスを返す */
+const findNoteSessionPath = async (): Promise<string | null> => {
+  const primary = resolveDataPath("note-storage-state.json");
   try {
-    await fs.access(sessionPath);
+    await fs.access(primary);
+    return primary;
   } catch {
+    // fallback: note-session-{id}.json を検索
+  }
+  const dataDir = resolveDataPath();
+  try {
+    const files = await fs.readdir(dataDir);
+    const fallback = files.find((f) => /^note-session-\d+\.json$/.test(f));
+    if (fallback) {
+      return resolveDataPath(fallback);
+    }
+  } catch {
+    // noop
+  }
+  return null;
+};
+
+const requireNoteSession = async (): Promise<string> => {
+  const sessionPath = await findNoteSessionPath();
+  if (!sessionPath) {
     throw new Error("NOTE_SESSION_NOT_FOUND");
   }
+  return sessionPath;
 };
 
 class NoteApiClient {
@@ -527,15 +548,16 @@ class NoteBrowserAutomation {
 }
 
 class NotePlaywrightClient {
+  constructor(private readonly storageStatePath: string) {}
+
   async run<T>(task: (page: Page) => Promise<T>) {
     const browser = await chromium.launch({ headless: env.PLAYWRIGHT_HEADLESS });
     const contextOptions: BrowserContextOptions = {
       viewport: { width: 1440, height: 960 }
     };
-    const storageStatePath = resolveDataPath("note-storage-state.json");
     try {
-      await fs.access(storageStatePath);
-      contextOptions.storageState = storageStatePath;
+      await fs.access(this.storageStatePath);
+      contextOptions.storageState = this.storageStatePath;
     } catch {
       // noop
     }
@@ -545,7 +567,7 @@ class NotePlaywrightClient {
     try {
       return await task(page);
     } finally {
-      await context.storageState({ path: storageStatePath });
+      await context.storageState({ path: this.storageStatePath });
       await browser.close();
     }
   }
@@ -755,10 +777,10 @@ export class PlaywrightAdapter implements SaveAdapter {
       };
     }
 
-    await requireNoteSession();
-    const client = new NotePlaywrightClient();
+    const sessionPath = await requireNoteSession();
+    const client = new NotePlaywrightClient(sessionPath);
     return client.run(async (page) => {
-      const automation = new NoteBrowserAutomation(resolveDataPath("note-storage-state.json"));
+      const automation = new NoteBrowserAutomation(sessionPath);
       return automation.save(page, context, this.method);
     });
   }
@@ -767,15 +789,8 @@ export class PlaywrightAdapter implements SaveAdapter {
     try {
       const browser = await chromium.launch({ headless: true });
       await browser.close();
-      const sessionPath = resolveDataPath("note-storage-state.json");
-      let hasSession = false;
-      try {
-        await fs.access(sessionPath);
-        hasSession = true;
-      } catch {
-        // noop
-      }
-      if (env.ENABLE_REAL_NOTE_AUTOMATION && hasSession) {
+      const sessionPath = await findNoteSessionPath();
+      if (env.ENABLE_REAL_NOTE_AUTOMATION && sessionPath) {
         return { status: "ok" as const, detail: "Playwright 起動可能 / note セッション保存済み" };
       }
       return { status: "ok" as const, detail: "Playwright 起動可能 (セッション未保存)" };

@@ -109,25 +109,17 @@ const writeLaunchers = async () => {
       "",
       "## 初回セットアップ（最初の1回だけ）",
       "",
-      "1. このフォルダを好きな場所に置く",
-      "2. Terminal でセットアップを実行（初回のみ）:",
-      "   ```",
-      "   cd このフォルダのパス",
-      "   chmod +x setup.sh && ./setup.sh",
-      "   ```",
-      "   → 実行権限の付与 + Chromium（ブラウザ自動操作エンジン）のインストールが行われる",
+      "1. `setup.command` をダブルクリック",
+      "   → 「開発元を確認できません」と表示されたら: 右クリック →「開く」→「開く」",
+      "   → Chromium（ブラウザ自動操作エンジン）のインストールが行われる",
       "",
       "## 起動方法",
       "",
-      "- `start-note-local.sh` をダブルクリック（Terminal が開いてサーバーが起動）",
-      "- または Terminal で: `./start-note-local.sh`",
+      "1. `start-note-local.command` をダブルクリック",
+      "   → 「開発元を確認できません」と表示されたら: 右クリック →「開く」→「開く」（初回のみ）",
+      "   → Terminal が開いてサーバーが起動し、ブラウザで http://127.0.0.1:3001 が開く",
       "",
       "初回起動時はセットアップ画面が表示されるので、APIキーとnoteアカウント情報を入力してね。",
-      "",
-      "## ヘッドレス起動（ブラウザを自動で開かない）",
-      "",
-      "- `start-note-local-headless.sh` を実行",
-      "- その後 http://127.0.0.1:3001 にアクセス",
       "",
       "## 注意事項",
       "",
@@ -138,16 +130,22 @@ const writeLaunchers = async () => {
         ? "- Intel Mac の場合は mac-x64 版を使ってね"
         : "- Apple Silicon Mac の場合は mac-arm64 版を使ってね",
     ].join("\n") + "\n";
+    // .sh と .command（Finderダブルクリック用）の両方を生成
     const shPath = path.join(releaseDir, "start-note-local.sh");
     const shHeadlessPath = path.join(releaseDir, "start-note-local-headless.sh");
     const setupShPath = path.join(releaseDir, "setup.sh");
+    const commandPath = path.join(releaseDir, "start-note-local.command");
+    const setupCommandPath = path.join(releaseDir, "setup.command");
     await fs.writeFile(shPath, startSh, "utf8");
     await fs.writeFile(shHeadlessPath, startHeadlessSh, "utf8");
     await fs.writeFile(setupShPath, setupSh, "utf8");
+    await fs.writeFile(commandPath, startSh, "utf8");
+    await fs.writeFile(setupCommandPath, setupSh, "utf8");
     await fs.writeFile(path.join(releaseDir, "README_FIRST.txt"), firstReadme, "utf8");
-    await fs.chmod(shPath, 0o755);
-    await fs.chmod(shHeadlessPath, 0o755);
-    await fs.chmod(setupShPath, 0o755);
+    // Windowsでchmodは効かないが tar.gz 内でパーミッションを保持するため設定
+    for (const p of [shPath, shHeadlessPath, setupShPath, commandPath, setupCommandPath]) {
+      await fs.chmod(p, 0o755);
+    }
   }
 };
 
@@ -248,6 +246,18 @@ const installPlaywrightBrowser = async () => {
   });
 };
 
+const archiveMac = async () => {
+  // tar.gz で配布（Unix パーミッションが保持される = .command ダブルクリックがそのまま動く）
+  // Windows の tar は絶対パス（C:\...）を受け付けないため cwd + 相対パスで実行する
+  const archName = platformArg === "mac-arm64" ? "note-arm64.tar.gz" : "note-x64.tar.gz";
+  const parentDir = path.dirname(releaseDir);
+  const folderName = path.basename(releaseDir);
+  const outPath = path.join(parentDir, archName);
+  console.log(`[archive] Creating ${archName}...`);
+  await run("tar", ["czf", archName, folderName], { cwd: parentDir });
+  console.log(`[archive] Done: ${outPath}`);
+};
+
 const main = async () => {
   await fs.rm(releaseDir, { recursive: true, force: true });
   await fs.mkdir(releaseDir, { recursive: true });
@@ -267,6 +277,7 @@ const main = async () => {
   if (!isMac) await installPlaywrightBrowser();
   await bundleNodeRuntime();
   await writeLaunchers();
+  if (isMac) await archiveMac();
 };
 
 main().catch((error) => {
