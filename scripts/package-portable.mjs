@@ -101,9 +101,9 @@ const writeLaunchers = async () => {
     await fs.writeFile(path.join(releaseDir, "start-note-local-headless.bat"), startHeadlessBat, "utf8");
     await fs.writeFile(path.join(releaseDir, "README_FIRST.txt"), firstReadme, "utf8");
   } else {
-    const startSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\nexport ENV_FILE_PATH="$DIR/.env"\nexport APP_DATA_DIR="$DIR/data"\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nexport SERVE_WEB_FROM_SERVER=true\nexport WEB_DIST_DIR="$DIR/saas-hub/dist"\nexport OPEN_BROWSER_ON_START=true\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/apps/server/dist/apps/server/src/server.js"\nelse\n  node "$DIR/apps/server/dist/apps/server/src/server.js"\nfi\n`;
+    const startSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\n# Fix permissions lost when zipped on Windows\nif [ -f "$DIR/runtime/bin/node" ] && [ ! -x "$DIR/runtime/bin/node" ]; then\n  chmod +x "$DIR/runtime/bin/node"\nfi\nexport ENV_FILE_PATH="$DIR/.env"\nexport APP_DATA_DIR="$DIR/data"\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nexport SERVE_WEB_FROM_SERVER=true\nexport WEB_DIST_DIR="$DIR/saas-hub/dist"\nexport OPEN_BROWSER_ON_START=true\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/apps/server/dist/apps/server/src/server.js"\nelse\n  node "$DIR/apps/server/dist/apps/server/src/server.js"\nfi\n`;
     const startHeadlessSh = startSh.replace("export OPEN_BROWSER_ON_START=true", "export OPEN_BROWSER_ON_START=false");
-    const setupSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\necho "=== note-local セットアップ ==="\necho "Chromium をインストール中..."\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/node_modules/playwright/cli.js" install chromium\nelse\n  node "$DIR/node_modules/playwright/cli.js" install chromium\nfi\necho ""\necho "セットアップ完了！start-note-local.sh でアプリを起動できます。"\n`;
+    const setupSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\necho "=== note-local セットアップ ==="\n# Fix permissions lost when zipped on Windows\nif [ -f "$DIR/runtime/bin/node" ]; then\n  chmod +x "$DIR/runtime/bin/node"\nfi\necho "Chromium をインストール中..."\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/node_modules/playwright/cli.js" install chromium\nelse\n  node "$DIR/node_modules/playwright/cli.js" install chromium\nfi\necho ""\necho "セットアップ完了！start-note-local.sh でアプリを起動できます。"\n`;
     const firstReadme = [
       "# note-local-draft-studio（Mac版）",
       "",
@@ -179,6 +179,59 @@ const resolveWorkspaceSymlinks = async () => {
   }
 };
 
+const fixNativeModulesForMac = async () => {
+  if (!isMac) return;
+
+  // When npm install runs on Windows, it downloads Windows prebuilt binaries.
+  // For Mac builds we must replace them with the correct darwin prebuilt.
+  const bsq3PkgPath = path.join(releaseDir, "node_modules", "better-sqlite3", "package.json");
+  let bsq3Version;
+  try {
+    const pkg = JSON.parse(await fs.readFile(bsq3PkgPath, "utf8"));
+    bsq3Version = pkg.version;
+  } catch {
+    console.log("[fixNativeModules] better-sqlite3 not found, skipping");
+    return;
+  }
+
+  const arch = platformArg === "mac-arm64" ? "arm64" : "x64";
+  // process.versions.modules == node ABI of the current (build) node, which matches the bundled runtime
+  const abi = process.versions.modules;
+  const prebuiltName = `better-sqlite3-v${bsq3Version}-node-v${abi}-darwin-${arch}.tar.gz`;
+  const downloadUrl = `https://github.com/WiseLibs/better-sqlite3/releases/download/v${bsq3Version}/${prebuiltName}`;
+
+  console.log(`[fixNativeModules] Downloading ${prebuiltName}...`);
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download ${prebuiltName}: HTTP ${response.status} from ${downloadUrl}`);
+  }
+
+  const tarPath = path.join(releaseDir, prebuiltName);
+  await fs.writeFile(tarPath, Buffer.from(await response.arrayBuffer()));
+
+  const extractDir = path.join(releaseDir, "_bsq3_tmp");
+  await fs.mkdir(extractDir, { recursive: true });
+  await run("tar", ["xzf", tarPath, "-C", extractDir]);
+
+  // prebuild-install format: prebuilds/<platform>-<arch>/node.napi.node
+  const srcPrebuilds = path.join(extractDir, "prebuilds");
+  const dstPrebuilds = path.join(releaseDir, "node_modules", "better-sqlite3", "prebuilds");
+  try {
+    await fs.access(srcPrebuilds);
+    await fs.cp(srcPrebuilds, dstPrebuilds, { recursive: true, force: true });
+  } catch {
+    // Fallback: older format — build/Release/better_sqlite3.node
+    const buildNode = path.join(extractDir, "build", "Release", "better_sqlite3.node");
+    const targetDir = path.join(dstPrebuilds, `darwin-${arch}`);
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.cp(buildNode, path.join(targetDir, "node.napi.node"));
+  }
+
+  await fs.rm(tarPath, { force: true });
+  await fs.rm(extractDir, { recursive: true, force: true });
+  console.log(`[fixNativeModules] better-sqlite3 darwin-${arch} (ABI ${abi}) installed`);
+};
+
 const installPlaywrightBrowser = async () => {
   await run(process.execPath, [path.join(releaseDir, "node_modules", "playwright", "cli.js"), "install", "chromium"], {
     cwd: releaseDir,
@@ -204,6 +257,7 @@ const main = async () => {
   await installRuntimeDependencies();
   await resolveWorkspaceSymlinks();
   await stripWorkspacesFromPackageJson();
+  await fixNativeModulesForMac();
   if (!isMac) await installPlaywrightBrowser();
   await bundleNodeRuntime();
   await writeLaunchers();
