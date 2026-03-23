@@ -103,19 +103,19 @@ const writeLaunchers = async () => {
   } else {
     const startSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\n# Fix permissions lost when zipped on Windows\nif [ -f "$DIR/runtime/bin/node" ] && [ ! -x "$DIR/runtime/bin/node" ]; then\n  chmod +x "$DIR/runtime/bin/node"\nfi\nexport ENV_FILE_PATH="$DIR/.env"\nexport APP_DATA_DIR="$DIR/data"\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nexport SERVE_WEB_FROM_SERVER=true\nexport WEB_DIST_DIR="$DIR/saas-hub/dist"\nexport OPEN_BROWSER_ON_START=true\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/apps/server/dist/apps/server/src/server.js"\nelse\n  node "$DIR/apps/server/dist/apps/server/src/server.js"\nfi\n`;
     const startHeadlessSh = startSh.replace("export OPEN_BROWSER_ON_START=true", "export OPEN_BROWSER_ON_START=false");
-    const setupSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\necho "=== note-local セットアップ ==="\n# Fix permissions lost when zipped on Windows\nif [ -f "$DIR/runtime/bin/node" ]; then\n  chmod +x "$DIR/runtime/bin/node"\nfi\necho "Chromium をインストール中..."\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/node_modules/playwright/cli.js" install chromium\nelse\n  node "$DIR/node_modules/playwright/cli.js" install chromium\nfi\necho ""\necho "セットアップ完了！start-note-local.sh でアプリを起動できます。"\n`;
+    const setupSh = `#!/bin/bash\nDIR="$(cd "$(dirname "$0")" && pwd)"\necho "=== note-local セットアップ ==="\n# Fix permissions lost when zipped on Windows\nchmod +x "$DIR/"*.sh 2>/dev/null || true\nif [ -f "$DIR/runtime/bin/node" ]; then\n  chmod +x "$DIR/runtime/bin/node"\nfi\necho "Chromium をインストール中..."\nexport PLAYWRIGHT_BROWSERS_PATH="$DIR/ms-playwright"\nif [ -f "$DIR/runtime/bin/node" ]; then\n  "$DIR/runtime/bin/node" "$DIR/node_modules/playwright/cli.js" install chromium\nelse\n  node "$DIR/node_modules/playwright/cli.js" install chromium\nfi\necho ""\necho "セットアップ完了！start-note-local.sh でアプリを起動できます。"\n`;
     const firstReadme = [
       "# note-local-draft-studio（Mac版）",
       "",
       "## 初回セットアップ（最初の1回だけ）",
       "",
       "1. このフォルダを好きな場所に置く",
-      "2. `setup.sh` をダブルクリック、または Terminal で実行:",
+      "2. Terminal でセットアップを実行（初回のみ）:",
       "   ```",
       "   cd このフォルダのパス",
-      "   ./setup.sh",
+      "   chmod +x setup.sh && ./setup.sh",
       "   ```",
-      "   → Chromium（ブラウザ自動操作エンジン）がインストールされる",
+      "   → 実行権限の付与 + Chromium（ブラウザ自動操作エンジン）のインストールが行われる",
       "",
       "## 起動方法",
       "",
@@ -206,30 +206,36 @@ const fixNativeModulesForMac = async () => {
     throw new Error(`Failed to download ${prebuiltName}: HTTP ${response.status} from ${downloadUrl}`);
   }
 
-  const tarPath = path.join(releaseDir, prebuiltName);
-  await fs.writeFile(tarPath, Buffer.from(await response.arrayBuffer()));
+  // Write tar to releaseDir so we can use relative paths with cwd (Windows tar chokes on "C:" in paths)
+  await fs.writeFile(path.join(releaseDir, prebuiltName), Buffer.from(await response.arrayBuffer()));
+  await fs.mkdir(path.join(releaseDir, "_bsq3_tmp"), { recursive: true });
+  await run("tar", ["xzf", prebuiltName, "-C", "_bsq3_tmp"], { cwd: releaseDir });
 
-  const extractDir = path.join(releaseDir, "_bsq3_tmp");
-  await fs.mkdir(extractDir, { recursive: true });
-  await run("tar", ["xzf", tarPath, "-C", extractDir]);
+  // Find the .node binary in the extracted dir (tarball structure varies by version)
+  const findNodeFile = async (dir) => {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name.endsWith(".node")) return p;
+      if (entry.isDirectory()) { const f = await findNodeFile(p); if (f) return f; }
+    }
+    return null;
+  };
+  const nodeSrc = await findNodeFile(path.join(releaseDir, "_bsq3_tmp"));
+  if (!nodeSrc) throw new Error("Could not find .node file in better-sqlite3 prebuilt tarball");
 
-  // prebuild-install format: prebuilds/<platform>-<arch>/node.napi.node
-  const srcPrebuilds = path.join(extractDir, "prebuilds");
-  const dstPrebuilds = path.join(releaseDir, "node_modules", "better-sqlite3", "prebuilds");
-  try {
-    await fs.access(srcPrebuilds);
-    await fs.cp(srcPrebuilds, dstPrebuilds, { recursive: true, force: true });
-  } catch {
-    // Fallback: older format — build/Release/better_sqlite3.node
-    const buildNode = path.join(extractDir, "build", "Release", "better_sqlite3.node");
-    const targetDir = path.join(dstPrebuilds, `darwin-${arch}`);
-    await fs.mkdir(targetDir, { recursive: true });
-    await fs.cp(buildNode, path.join(targetDir, "node.napi.node"));
-  }
+  const bsq3Dir = path.join(releaseDir, "node_modules", "better-sqlite3");
+  // 1. build/Release/better_sqlite3.node  — loaded by node-bindings
+  const buildReleaseDir = path.join(bsq3Dir, "build", "Release");
+  await fs.mkdir(buildReleaseDir, { recursive: true });
+  await fs.cp(nodeSrc, path.join(buildReleaseDir, "better_sqlite3.node"));
+  // 2. prebuilds/darwin-{arch}/node.napi.node — loaded by node-gyp-build
+  const prebuildsDir = path.join(bsq3Dir, "prebuilds", `darwin-${arch}`);
+  await fs.mkdir(prebuildsDir, { recursive: true });
+  await fs.cp(nodeSrc, path.join(prebuildsDir, "node.napi.node"));
 
-  await fs.rm(tarPath, { force: true });
-  await fs.rm(extractDir, { recursive: true, force: true });
-  console.log(`[fixNativeModules] better-sqlite3 darwin-${arch} (ABI ${abi}) installed`);
+  await fs.rm(path.join(releaseDir, prebuiltName), { force: true });
+  await fs.rm(path.join(releaseDir, "_bsq3_tmp"), { recursive: true, force: true });
+  console.log(`[fixNativeModules] better-sqlite3 darwin-${arch} (ABI ${abi}) installed at build/Release/ and prebuilds/`);
 };
 
 const installPlaywrightBrowser = async () => {
