@@ -203,7 +203,7 @@ export function ArticlePreviewDialog({
         <div className="border-t border-border/60 px-6 py-4 space-y-3">
           <div className="space-y-1.5">
             <Label className="text-xs text-muted-foreground">
-              AIへの追加指示（任意） — 入力して再生成できるよ
+              AIへの追加指示（任意） — 入力して再生成できます
             </Label>
             <Textarea
               data-testid="additional-prompt"

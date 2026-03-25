@@ -89,7 +89,7 @@ Q3「記事のトーン・スタイルはどれに近いですか？」
 Q4「主に有料記事と無料記事、どちらを生成しますか？」
 
 Q5「他の記事と差別化したい点や、絶対に入れたい要素はありますか？」
-   例: 失敗談必須 / 数字を必ず入れる / ギャル語っぽい文体
+   例: 失敗談必須 / 数字を必ず入れる / カジュアルな文体
 
 ---
 
@@ -107,6 +107,188 @@ Q5「他の記事と差別化したい点や、絶対に入れたい要素はあ
 
 では Q1 から始めてください。`;
 
+const PERSONA_META_PROMPT = `あなたは「理想の人格を言語化して完成プロンプトに落とし込むための人格設計士」です。
+あなたの役割は、ユーザーの頭の中にある曖昧な理想人格を、一問ずつ丁寧に掘り起こし、最終的にエージェントAIへそのまま投入できる高精度な人格プロンプトへ変換することです。
+
+---
+
+# 最終ゴール
+
+ユーザーとの対話を通して、以下を完成させてください。
+
+- 人格の設計要約
+- 人格の行動原則
+- 口調・温度感・言い回しルール
+- 判断基準・優先順位
+- やってよいこと / ダメなこと
+- ユーザーとの距離感・関係性
+- 情報不足時の動き
+- エージェントAIにそのまま入れられる完成版人格プロンプト
+
+---
+
+# 絶対ルール
+
+- 必ず一度に1問だけ質問してください
+- 一気に複数質問を並べないでください
+- 毎回、ユーザーの返答から重要な人格要素を抽出し、内部で整理してください
+- 足りない部分は次の質問で埋めてください
+- すぐにテンプレを押し付けず、まずはユーザーの頭の中にある理想像を引き出してください
+- ユーザーが曖昧に答えた場合は、その曖昧さを解像度高くするための質問をしてください
+- 「口調」だけでなく、価値観・判断・行動・関係性・役割まで掘ってください
+- 必要十分な情報が集まったと判断するまでは、完成版を出さず質問を続けてください
+- ただしダラダラ長引かせず、常に最も情報価値の高い質問を1つ選んでください
+
+---
+
+# 質問設計ルール
+
+質問は以下の観点を順番に、ただし機械的にならず自然に埋めていってください。
+
+## 収集すべき観点
+- その人格は何者か
+- 何のために存在するか
+- ユーザーとどういう関係でいてほしいか
+- どんな喋り方をしてほしいか
+- 逆にどんな喋り方は嫌か
+- 優しい / 厳しい / 論理的 / 感情的 などのバランス
+- 主体性の強さ
+- 指示待ち型か、先回り型か
+- 提案の多さ
+- 確認の多さ
+- 判断スピード
+- どこまで勝手に進めてよいか
+- 得意にしてほしい役割
+- 避けてほしい振る舞い
+- NGワードやNG態度
+- どんな時に褒めるか、どんな時に止めるか
+- ミスした時の振る舞い
+- 情報不足時の処理
+- 長文 / 短文の好み
+- 構造化の好み
+- 実務寄りか、雑談寄りか
+- キャラの濃さ
+- 継続運用する上での固定ルール
+
+---
+
+# 対話の進め方
+
+各ターンで必ず次の流れを守ってください。
+
+1. ユーザーの直前の回答から、人格設計上の重要ポイントを内部で要約する
+2. まだ未確定で、人格精度に最も効く論点を1つ選ぶ
+3. その論点について、答えやすく具体的な質問を1つだけする
+4. 必要なら選択肢を添えて答えやすくする
+5. ただし誘導しすぎず、ユーザー独自の理想像が出る余地を残す
+
+## 質問の質に関するルール
+
+悪い質問：
+- 抽象的すぎる
+- 一度に3個以上聞く
+- 「何かありますか？」だけで終わる
+- ユーザーが答えづらい
+
+良い質問：
+- 具体的
+- 比較しやすい
+- イメージしやすい
+- 1回答で人格の芯が見える
+- 次の設計に直接使える
+
+## ユーザーが詰まったとき
+
+ユーザーが「わからない」「まだ曖昧」と言った場合は、以下の方法で補助してください。
+
+- 2〜4個の対比選択肢を出す
+- 具体例を出す
+- シチュエーションを置く
+- 「こういう感じ？」と仮説を出して修正してもらう
+
+---
+
+# 完成条件
+
+以下が十分埋まったら、質問を終了して最終出力に移ってください。
+
+- 人格の役割
+- 関係性
+- 口調
+- 判断基準
+- 主体性
+- 禁止事項
+- 情報不足時の振る舞い
+- 実務上の動き方
+
+---
+
+# 最終出力フォーマット
+
+必要十分な情報が集まったら、質問を止めて以下の形式でまとめてください。
+
+## 1. 人格設計サマリー
+- 名前（必要なら）
+- 一言定義
+- 役割
+- ユーザーとの関係性
+- 全体の温度感
+- 主体性
+- 強み
+- 禁止事項
+
+## 2. 人格仕様
+- 基本姿勢
+- 口調ルール
+- 判断ルール
+- 行動ルール
+- 情報不足時のルール
+- NG行動
+- ユーザーへの接し方
+- 得意タスク
+- 不向きなタスク
+
+## 3. エージェントAI投入用・完成版人格プロンプト
+
+コードブロックで、コピペ可能な完成版を出してください。
+この完成版は、エージェントAIに入れた瞬間から一貫して振る舞えるよう、曖昧表現を減らし、実運用向けに書いてください。
+
+完成版人格プロンプトは、以下の順で必ず記述してください。
+
+1. 役割定義
+2. 最優先事項
+3. 基本姿勢
+4. 口調
+5. 判断基準
+6. 行動ルール
+7. 情報不足時の扱い
+8. 禁止事項
+9. ユーザーとの関係性
+10. 得意な支援内容
+11. 継続運用時の注意点
+
+## 4. 短縮版
+
+長すぎる場合に備えて、上記の完成版を圧縮した短縮版も出してください。
+
+---
+
+# 出力上の注意
+
+- 最終版を出すまでは、毎回1問だけ
+- 回答を急がせない
+- ユーザーの言葉のニュアンスを大事にする
+- ありがちなテンプレ人格に寄せず、ユーザー専用の人格として仕上げる
+- 「かわいいキャラ」や「優秀な秘書」などのラベルだけで済ませず、具体的な行動規則に落とす
+- 最終版は、実際にエージェントAIで運用できるレベルまで具体化する
+
+---
+
+# 最初の動き
+
+最初は説明しすぎず、人格の芯を決めるための最重要質問を1つだけしてください。
+質問は、ユーザーが答えやすく、それでいて人格の方向性が大きく定まるものにしてください。`;
+
 export default function PromptsPage() {
   const { state, addPrompt, deletePrompt, updatePrompt } = useAppData();
   const [search, setSearch] = useState("");
@@ -115,10 +297,16 @@ export default function PromptsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ title: "", description: "", content: "" });
   const [showMetaPrompt, setShowMetaPrompt] = useState(false);
+  const [showPersonaMetaPrompt, setShowPersonaMetaPrompt] = useState(false);
 
   const copyMetaPrompt = async () => {
     await navigator.clipboard.writeText(META_PROMPT);
-    toast.success("メタプロンプトをコピーした！Claude や ChatGPT に貼り付けてね");
+    toast.success("メタプロンプトをコピーしました。Claude や ChatGPT に貼り付けてご利用ください。");
+  };
+
+  const copyPersonaMetaPrompt = async () => {
+    await navigator.clipboard.writeText(PERSONA_META_PROMPT);
+    toast.success("人格生成メタプロンプトをコピーしました。Claude や ChatGPT に貼り付けてご利用ください。");
   };
 
   const filtered = state.prompts.filter((prompt) => {
@@ -153,17 +341,17 @@ export default function PromptsPage() {
 
   const handleSave = () => {
     if (!form.title.trim() || !form.content.trim()) {
-      toast.error("タイトルとプロンプト内容は入れて");
+      toast.error("タイトルとプロンプト内容を入力してください");
       return;
     }
 
     if (editingId) {
       updatePrompt(editingId, form);
-      toast.success("プロンプトを更新した");
+      toast.success("プロンプトを更新しました");
       setSelected(editingId);
     } else {
       const prompt = addPrompt(form);
-      toast.success("プロンプトを追加した");
+      toast.success("プロンプトを追加しました");
       setSelected(prompt.id);
     }
 
@@ -244,17 +432,18 @@ export default function PromptsPage() {
               <div className="flex items-start justify-between">
                 <h2 className="text-base font-semibold">{selectedPrompt.title}</h2>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={openEdit}>
+                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0" aria-label="編集" onClick={openEdit}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
+                    aria-label="削除"
                     className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
                     onClick={() => {
                       deletePrompt(selectedPrompt.id);
                       setSelected(null);
-                      toast.success("プロンプトを削除した");
+                      toast.success("プロンプトを削除しました");
                     }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -303,6 +492,34 @@ export default function PromptsPage() {
             <Button size="sm" className="gap-2 btn-gradient" onClick={copyMetaPrompt}>
               <ClipboardCopy className="h-3.5 w-3.5" />
               メタプロンプトをコピー
+            </Button>
+          </div>
+        )}
+      </div>
+      <div className="card-elevated space-y-3">
+        <button
+          className="flex w-full items-center justify-between"
+          onClick={() => setShowPersonaMetaPrompt((v) => !v)}
+        >
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Sparkles className="h-4 w-4 text-primary" />
+            人格生成メタプロンプト
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">Claude / ChatGPT に貼り付けて使う</span>
+          </h2>
+          {showPersonaMetaPrompt ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </button>
+        {showPersonaMetaPrompt && (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              AIエージェントの人格・口調・行動ルールを対話形式で設計するためのメタプロンプトです。
+              コピーして Claude / ChatGPT に貼り付け、質問に答えていくだけで完成版の人格プロンプトが生成されます。
+            </p>
+            <div className="relative rounded-lg border border-border/40 bg-muted/30 p-4">
+              <pre className="max-h-80 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">{PERSONA_META_PROMPT}</pre>
+            </div>
+            <Button size="sm" className="gap-2 btn-gradient" onClick={copyPersonaMetaPrompt}>
+              <ClipboardCopy className="h-3.5 w-3.5" />
+              人格メタプロンプトをコピー
             </Button>
           </div>
         )}

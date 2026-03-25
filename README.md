@@ -1,67 +1,174 @@
-# note記事自動生成・下書き保存ローカルアプリ 開発入口
+# note Flow Studio
 
-## このリポジトリの現状
-現時点では、初期実装まで完了している。
-開発の正本として、分割済み設計資料 `note_local_app_design_package_v_2_pinchtab_split/` を参照しつつ、実装は `apps/web`, `apps/server`, `packages/shared` に分かれている。
+AI で note 記事を自動生成し、そのまま note に下書き保存・公開・予約投稿できるローカルアプリです。
 
-## 目標
-- キーワード、参考資料、ジャンル指定から note 用記事を生成する
-- アイキャッチ画像、本文画像、必要に応じたグラフを生成する
-- 無料部分から有料部分への導線を含む販売用記事を作れるようにする
-- note 下書き保存と note 販売設定反映を準自動化する
-- 保存失敗時に `note 非公式API -> Playwright -> PinchTab` の順でフォールバックできるようにする
+---
 
-## 最初に読むファイル
-- `AGENTS.md`
-- `PROJECT_CONTEXT.md`
-- `DEVELOPMENT_ROADMAP.md`
-- `TASKS.md`
-- `UI_CURRENT_STATE_SPECIFICATION.md`
-- `UI_SPECIFICATION.md`
-- `PORTABLE_DISTRIBUTION.md`
-- `note_local_app_design_package_v_2_pinchtab_split/README.md`
+## できること
 
-## 設計資料マップ
-- 文書概要: `note_local_app_design_package_v_2_pinchtab_split/00_document_overview.md`
-- 要件定義: `note_local_app_design_package_v_2_pinchtab_split/01_requirements.md`
-- 画面仕様: `note_local_app_design_package_v_2_pinchtab_split/02_screen_specifications.md`
-- ワイヤーフレーム: `note_local_app_design_package_v_2_pinchtab_split/03_wireframes.md`
-- 機能一覧: `note_local_app_design_package_v_2_pinchtab_split/04_feature_list.md`
-- ユースケース: `note_local_app_design_package_v_2_pinchtab_split/05_use_cases.md`
-- DB設計: `note_local_app_design_package_v_2_pinchtab_split/06_database_design.md`
-- API仕様: `note_local_app_design_package_v_2_pinchtab_split/07_api_specification.md`
-- 例外ルール: `note_local_app_design_package_v_2_pinchtab_split/08_business_and_exception_rules.md`
-- 技術方針: `note_local_app_design_package_v_2_pinchtab_split/10_technical_policy.md`
-- 実装優先順位: `note_local_app_design_package_v_2_pinchtab_split/12_implementation_priority.md`
+- **AI 記事生成** — キーワードを入力するだけで、無料部分＋有料導線＋有料部分を含む販売用 note 記事を自動生成
+- **note 連携** — 生成した記事をワンクリックで note に下書き保存・即時公開・予約投稿
+- **参考資料の取り込み** — URL や Markdown / テキストファイルをアップロードすると、AI が内容を読み取って記事に反映
+- **複数 AI プロバイダー対応** — Gemini、OpenAI 互換 API（Qwen 等）を切り替えて使用可能
+- **プロンプト管理** — 記事のトーンや構成をカスタマイズできるプロンプトテンプレートを管理
+- **メタプロンプト** — プロンプト生成・人格生成用のメタプロンプトを内蔵（Claude / ChatGPT にコピペして使用）
+- **複数アカウント対応** — 複数の note アカウントを登録して切り替え可能
+- **完全ローカル動作** — データはすべてお使いの PC 内に保存。外部サーバーへの送信なし
 
-## 開発のおすすめ開始順
-1. 技術スタックを確定する
-2. 最小構成のフォルダを作る
-3. SQLite スキーマとマイグレーション基盤を作る
-4. ローカルAPIサーバーとジョブ実行基盤を作る
-5. 記事生成、履歴、保存の最短フローを通す
-6. 参考資料、画像、販売導線、販売設定自動化を順次追加する
+---
 
-## 今このリポジトリでCodexに期待すること
-- 設計を読み、迷いなく着手する
-- 実装に必要な不足点を見つけたら明示する
-- 影響範囲が広い変更は、コードと設計をセットで更新する
+## 対応環境
 
-## 実装済み
-- npm workspaces 構成
-- React + Vite + Tailwind の Web UI
-- Fastify + SQLite + Drizzle の API / DB
-- 参考資料取込、記事生成、履歴、詳細、保存、診断
-- Gemini モック対応のAIプロバイダ層
-- note 非公式API / Playwright / PinchTab の保存アダプタ
-- Unit / Integration / E2E テスト
-- Windows 向け `portable` 配布パッケージ生成
-- 初回セットアップ画面と依存関係チェック
-- Node / Playwright 同梱のクリーン環境起動検証
+| プラットフォーム | 配布ファイル |
+|----------------|------------|
+| Windows 10 / 11 | `note-local-draft-studio-portable-win.zip` |
+| Mac (Apple Silicon) | `note-arm64.tar.gz` |
+| Mac (Intel) | `note-x64.tar.gz` |
 
-## 配布版の現状
-- 配布方式は `Windows portable` で確定
-- 出力先は `release/note-local-draft-studio-portable`
-- 起動ファイルは `start-note-local.bat`
-- 初回起動時はセットアップ画面で API キー、note ログイン情報、PinchTab 設定を保存できる
-- 詳細は `PORTABLE_DISTRIBUTION.md` を参照
+---
+
+## セットアップ手順
+
+### Windows
+
+1. `note-local-draft-studio-portable-win.zip` を任意のフォルダに展開
+2. `start-note-local.bat` をダブルクリック
+3. ブラウザが自動で開き、アプリが表示されます
+
+### Mac
+
+1. `note-arm64.tar.gz`（Apple Silicon）または `note-x64.tar.gz`（Intel）を展開
+   ```bash
+   tar xzf note-arm64.tar.gz
+   ```
+2. 展開されたフォルダ内で `setup.sh` を実行
+   ```bash
+   cd note-local-draft-studio-portable-mac-arm64
+   bash setup.sh
+   ```
+3. `start.sh` でアプリを起動
+   ```bash
+   bash start.sh
+   ```
+4. ブラウザが自動で開き、アプリが表示されます
+
+---
+
+## 初回設定
+
+アプリが起動したら、以下の順番で設定してください。
+
+### 1. note アカウントの登録
+
+1. 左メニュー「設定」を開く
+2. 「note アカウント」タブでアカウント名を入力して「追加」
+3. 「note にログイン」ボタンからログイン（ブラウザが開きます）
+
+### 2. AI プロバイダーの設定
+
+1. 「設定」→「AI provider」タブを開く
+2. 使用したいプロバイダーを選択（Gemini または Custom OpenAI 互換）
+3. API キーを入力して「設定を保存」
+4. 「接続テスト」で疎通確認
+
+> **対応プロバイダー例**
+> - Google Gemini（API キーは [Google AI Studio](https://aistudio.google.com/) で取得）
+> - Alibaba Qwen（Coding Plan / Model Studio）
+> - その他 OpenAI 互換 API
+
+---
+
+## 記事を作成する
+
+1. 左メニュー「記事生成」を開く
+2. **キーワード**を入力（例：「副業の始め方」）
+3. **ジャンル**を選択
+4. 必要に応じて以下を設定：
+   - **補足指示** — AI への追加の指示（例：「具体的な数字を入れて」）
+   - **参考資料** — URL の追加や `.md` / `.txt` ファイルのアップロード
+   - **AI provider** — 使用する AI を切り替え
+   - **プロンプト** — 記事テンプレートを選択
+   - **販売モード / 想定価格** — 有料記事の設定
+5. 下部のボタンから投稿方法を選択：
+   - **生成後即公開** — 生成後すぐに note に公開
+   - **生成後下書き** — 生成後に note の下書きとして保存
+   - **生成後予約投稿** — 指定日時に自動公開
+
+---
+
+## 画面構成
+
+| 画面 | 説明 |
+|------|------|
+| 記事生成 | キーワード入力〜記事生成〜note 投稿までの一連操作 |
+| 投稿管理 | 生成済み記事の一覧・詳細確認・編集・再投稿 |
+| プロンプト管理 | 記事生成用プロンプトテンプレートの追加・編集・削除 |
+| 設定 | note アカウント、AI プロバイダー、ジャンル一覧の管理 |
+| 環境診断 | アプリの動作環境を自動チェック |
+
+---
+
+## よくある質問
+
+### Q. API キーはどこで取得できますか？
+Gemini の場合は [Google AI Studio](https://aistudio.google.com/) でログインし、「Get API key」から取得できます。
+
+### Q. 記事生成に時間がかかります
+AI プロバイダーやモデルによって異なりますが、通常 1〜3 分程度です。プログレスバーで進行状況を確認できます。
+
+### Q. note へのログインが必要ですか？
+はい。記事を note に保存・公開するには、事前に note アカウントでログインしておく必要があります。設定画面の「note にログイン」からログインしてください。
+
+### Q. データはどこに保存されますか？
+すべてのデータ（記事、設定、ログイン情報）はアプリフォルダ内の `data/` ディレクトリに保存されます。外部サーバーへの送信は一切ありません。
+
+### Q. 参考資料は何に使われますか？
+アップロードした URL やファイルの内容を AI が読み取り、記事本文に反映します。たとえば実験データの `.md` ファイルをアップロードすると、そのデータを引用した記事が生成されます。
+
+---
+
+## AI エージェントによるリモート操作
+
+Claude Code や Codex などの AI エージェントから、このアプリの GUI を直接操作できます。
+
+### できること
+
+- キーワード入力・プロバイダー選択・記事生成・note 保存までの全工程を自然言語で指示
+- 設定変更（API キー設定、アカウント追加、プロバイダー切替）
+- 生成結果の確認・スクリーンショット取得
+- 投稿管理画面での記事編集・再投稿
+
+### 使い方
+
+1. アプリを起動し、note へのログインを済ませる
+2. AI エージェント（Claude Code CLI 等）のセッションを開始する
+3. 自然言語で指示する
+
+```
+例: 「キーワード『副業の始め方』で記事を作って、下書き保存して」
+例: 「設定画面で AI プロバイダーを Qwen に変更して」
+例: 「投稿管理から記事 ID 5 を note に公開して」
+```
+
+AI エージェントが Chrome ブラウザ連携（MCP）を通じて GUI を操作し、結果を報告します。
+
+> **補足**: note ログインはセキュリティ上の理由からユーザー自身が行う必要があります。ログイン後のすべての操作は AI エージェントに任せることができます。
+
+---
+
+## 技術スタック（開発者向け）
+
+| レイヤー | 技術 |
+|---------|------|
+| フロントエンド | React + Vite + Tailwind CSS + shadcn/ui |
+| バックエンド | Fastify + SQLite (better-sqlite3) + Drizzle ORM |
+| AI | Gemini API / OpenAI 互換 API |
+| note 連携 | Playwright（ブラウザ自動操作） |
+| テスト | Vitest + Playwright E2E |
+| 配布 | Node.js + Playwright 同梱ポータブルパッケージ |
+
+---
+
+## ライセンス
+
+プロプライエタリ。無断での複製・配布・転売を禁じます。

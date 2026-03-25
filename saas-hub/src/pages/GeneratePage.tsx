@@ -26,7 +26,10 @@ const toFriendlyError = (error: unknown): string => {
     JOB_NOT_FOUND: "生成ジョブが見つかりません。もう一度生成してください。",
     ARTICLE_NOT_READY: "記事データがまだ準備できていません。しばらく待ってから再試行してください。",
   };
-  return map[msg] ?? msg;
+  if (map[msg]) return map[msg];
+  if (msg.includes("NOTE_SESSION") || msg.includes("NOTE_LOGIN"))
+    return "note への保存に失敗しました。設定ページで Playwright セッションを取得するか、非公式 API URL を設定してください。";
+  return msg;
 };
 
 export default function GeneratePage() {
@@ -86,8 +89,8 @@ export default function GeneratePage() {
   const addUrl = () => {
     const url = urlInput.trim();
     if (!url) return;
-    try { new URL(url); } catch { toast.error("正しいURLを入力して"); return; }
-    if (referenceUrls.includes(url)) { toast.error("同じURLはすでに追加済みだよ"); return; }
+    try { new URL(url); } catch { toast.error("正しいURLを入力してください"); return; }
+    if (referenceUrls.includes(url)) { toast.error("同じURLはすでに追加されています"); return; }
     setReferenceUrls((prev) => [...prev, url]);
     setUrlInput("");
   };
@@ -99,7 +102,7 @@ export default function GeneratePage() {
     for (const file of files) {
       const ext = file.name.split(".").pop()?.toLowerCase();
       if (!["txt", "md"].includes(ext ?? "")) {
-        toast.error(`.txt と .md のみ対応してるよ（${file.name}）`);
+        toast.error(`.txt と .md ファイルのみ対応しています（${file.name}）`);
         continue;
       }
       const reader = new FileReader();
@@ -129,12 +132,12 @@ export default function GeneratePage() {
 
   const handleGenerate = async (action: "publish" | "draft" | "schedule") => {
     if (!keyword.trim()) {
-      toast.error("キーワードを入れてから実行して");
+      toast.error("キーワードを入力してください");
       return;
     }
 
     if (action === "schedule" && !scheduledAt) {
-      toast.error("予約投稿するなら日時を選んで");
+      toast.error("予約投稿の日時を選択してください");
       return;
     }
 
@@ -155,7 +158,7 @@ export default function GeneratePage() {
           const result = await createReferenceMaterial({ type: "url", url });
           refIds.push(result.id);
         } catch {
-          toast.error(`URL取得に失敗したけど続行するよ: ${url}`);
+          toast.error(`URL取得に失敗しましたが続行します: ${url}`);
         }
       }
       for (const file of referenceFiles) {
@@ -163,7 +166,7 @@ export default function GeneratePage() {
           const result = await createReferenceMaterial({ type: "file", filename: file.name, content: file.content });
           refIds.push(result.id);
         } catch {
-          toast.error(`ファイル登録に失敗したけど続行するよ: ${file.name}`);
+          toast.error(`ファイル登録に失敗しましたが続行します: ${file.name}`);
         }
       }
 
@@ -208,17 +211,16 @@ export default function GeneratePage() {
         return;
       }
 
-      navigate(`/articles/${resolvedArticle.id}`);
-
       if (action === "publish") {
         const result = await publishArticle(resolvedArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
+        navigate(`/articles/${resolvedArticle.id}`);
         if (result?.noteUrl) {
           window.open(result.noteUrl, "_blank", "noopener,noreferrer");
-          toast.success("note 公開完了！タブで開いたよ");
+          toast.success("note 公開が完了しました");
         } else {
-          toast.success("記事を生成して公開キューに回した");
+          toast.success("記事を生成して公開処理を開始しました");
         }
         return;
       }
@@ -227,18 +229,20 @@ export default function GeneratePage() {
         const result = await saveDraft(resolvedArticle.id);
         setGenerationProgress(100);
         setGenerationStep("完了！");
+        navigate(`/articles/${resolvedArticle.id}`);
         if (result?.noteUrl) {
           window.open(result.noteUrl, "_blank", "noopener,noreferrer");
-          toast.success("下書き保存完了！タブで開いたよ");
+          toast.success("下書き保存が完了しました");
         } else {
-          toast.success("記事を生成して下書き保存を開始した");
+          toast.success("記事を生成して下書き保存を開始しました");
         }
         return;
       }
 
       setGenerationProgress(100);
       setGenerationStep("完了！");
-      toast.success("記事を生成して予約投稿設定に回した");
+      navigate(`/articles/${resolvedArticle.id}`);
+      toast.success("記事を生成して予約投稿を設定しました");
     } catch (error) {
       if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
       setGenerationProgress(0);
@@ -255,41 +259,44 @@ export default function GeneratePage() {
     setSubmittingAction(pendingAction);
     setGenerationProgress(82);
     setGenerationStep("note に保存中...");
+    const targetId = previewArticle.id;
     try {
-      navigate(`/articles/${previewArticle.id}`);
       if (pendingAction === "publish") {
-        const result = await publishArticle(previewArticle.id);
+        const result = await publishArticle(targetId);
         setGenerationProgress(100);
         setGenerationStep("完了！");
+        updateArticle(targetId, { pendingNoteAction: null, status: "completed" });
+        navigate(`/articles/${targetId}`);
         if (result?.noteUrl) {
           window.open(result.noteUrl, "_blank", "noopener,noreferrer");
-          toast.success("note 公開完了！タブで開いたよ");
+          toast.success("note 公開が完了しました");
         } else {
-          toast.success("記事を生成して公開キューに回した");
+          toast.success("記事を生成して公開処理を開始しました");
         }
       } else if (pendingAction === "draft") {
-        const result = await saveDraft(previewArticle.id);
+        const result = await saveDraft(targetId);
         setGenerationProgress(100);
         setGenerationStep("完了！");
+        updateArticle(targetId, { pendingNoteAction: null, status: "completed" });
+        navigate(`/articles/${targetId}`);
         if (result?.noteUrl) {
           window.open(result.noteUrl, "_blank", "noopener,noreferrer");
-          toast.success("下書き保存完了！タブで開いたよ");
+          toast.success("下書き保存が完了しました");
         } else {
-          toast.success("記事を生成して下書き保存を開始した");
+          toast.success("記事を生成して下書き保存を開始しました");
         }
       } else {
         setGenerationProgress(100);
         setGenerationStep("完了！");
-        toast.success("記事を生成して予約投稿設定に回した");
+        updateArticle(targetId, { pendingNoteAction: null, status: "completed" });
+        navigate(`/articles/${targetId}`);
+        toast.success("記事を生成して予約投稿を設定しました");
       }
     } catch (error) {
       setGenerationProgress(0);
       toast.error(toFriendlyError(error));
     } finally {
       setSubmittingAction(null);
-      if (previewArticle?.id) {
-        updateArticle(previewArticle.id, { pendingNoteAction: null });
-      }
       setPreviewArticle(null);
       setPendingAction(null);
     }
@@ -308,6 +315,8 @@ export default function GeneratePage() {
       }
       const updated = await regenerateAssets(previewArticle.id, useDefaultProvider ? undefined : selectedProvider);
       if (updated) setPreviewArticle(updated);
+    } catch (error) {
+      toast.error(toFriendlyError(error));
     } finally {
       setIsRegenerating(false);
     }
@@ -598,10 +607,10 @@ export default function GeneratePage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 {generationProgress < 80
-                  ? "AI が記事を書いてる。最大 2〜3 分かかる場合があるよ..."
+                  ? "AI が記事を生成しています。2〜3 分ほどかかる場合があります..."
                   : generationProgress < 100
                   ? "note に保存中..."
-                  : "完了！画面が切り替わるよ"}
+                  : "完了しました。画面が切り替わります。"}
               </p>
             </div>
           )}

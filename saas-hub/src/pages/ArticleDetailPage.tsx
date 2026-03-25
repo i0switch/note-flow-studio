@@ -39,9 +39,9 @@ export default function ArticleDetailPage() {
 
   if (!article && isHydrating) {
     return (
-      <PageWrapper title="記事を読み込み中" description="保存済みデータを確認している。少しだけ待って。">
+      <PageWrapper title="記事を読み込み中" description="保存済みデータを確認しています。">
         <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
-          他のブラウザで作成した記事も含めて確認中。
+          記事データを読み込んでいます。しばらくお待ちください。
         </div>
       </PageWrapper>
     );
@@ -49,9 +49,9 @@ export default function ArticleDetailPage() {
 
   if (!article) {
     return (
-      <PageWrapper title="この記事はまだ表示できない" description="保存済みの記事一覧から開き直すと表示できることが多い。">
+      <PageWrapper title="記事が見つかりません" description="記事一覧から開き直すと表示できる場合があります。">
         <div className="rounded-lg border border-border bg-card p-6 text-sm text-muted-foreground">
-          このURLの記事データがまだ読み込まれていないか、すでに削除されている可能性がある。
+          この記事はまだ読み込まれていないか、すでに削除されている可能性があります。
         </div>
         <Button onClick={() => navigate("/articles")}>記事一覧へ戻る</Button>
       </PageWrapper>
@@ -61,18 +61,18 @@ export default function ArticleDetailPage() {
   const handleSave = () => {
     updateArticle(article.id, draft);
     setIsEditing(false);
-    toast.success("記事内容を保存した");
+    toast.success("記事内容を保存しました");
   };
 
   const handleDelete = async () => {
-    if (!confirm("この記事を削除する？元に戻せないよ")) return;
+    if (!confirm("この記事を削除しますか？この操作は元に戻せません。")) return;
     setIsDeleting(true);
     try {
       await deleteArticle(article.id);
-      toast.success("記事を削除した");
+      toast.success("記事を削除しました");
       navigate("/articles");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "削除に失敗した");
+      toast.error(error instanceof Error ? error.message : "削除に失敗しました");
       setIsDeleting(false);
     }
   };
@@ -82,14 +82,14 @@ export default function ArticleDetailPage() {
     try {
       if (action === "draft") {
         await saveDraft(article.id);
-        toast.success("note 下書き保存が完了した");
+        toast.success("note 下書き保存が完了しました");
         return;
       }
 
       await publishArticle(article.id);
-      toast.success("note 公開が完了した");
+      toast.success("note 公開が完了しました");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "note 投稿に失敗した");
+      toast.error(error instanceof Error ? error.message : "note 投稿に失敗しました");
     } finally {
       setNoteSubmitting(null);
     }
@@ -173,7 +173,6 @@ export default function ArticleDetailPage() {
       <Tabs defaultValue="content">
         <TabsList className="bg-muted/50">
           <TabsTrigger value="content">本文</TabsTrigger>
-          <TabsTrigger value="media">素材</TabsTrigger>
           <TabsTrigger value="references">参考資料</TabsTrigger>
           <TabsTrigger value="history">実行履歴</TabsTrigger>
         </TabsList>
@@ -197,15 +196,9 @@ export default function ArticleDetailPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="media" className="mt-4 space-y-4">
-          <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">
-            画像・グラフ生成機能は削除されました。
-          </div>
-        </TabsContent>
-
         <TabsContent value="references" className="mt-4 space-y-3">
           {article.references.length === 0 ? (
-            <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">参考資料はまだ紐づいていない。</div>
+            <div className="rounded-lg border border-border bg-card p-5 text-sm text-muted-foreground">参考資料はまだ紐づいていません。</div>
           ) : (
             article.references.map((reference, index) => (
               <div key={`${reference.title}-${index}`} className="space-y-1 rounded-lg border border-border bg-card p-5">

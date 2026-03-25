@@ -68,12 +68,12 @@ export default function ManualArticlePage() {
 
   const handleSave = async (action: "publish" | "draft" | "schedule") => {
     if (!title.trim() || !keyword.trim()) {
-      toast.error("タイトルとキーワードは入れて");
+      toast.error("タイトルとキーワードを入力してください");
       return;
     }
 
     if (action === "schedule" && !scheduledAt) {
-      toast.error("予約投稿するなら日時を選んで");
+      toast.error("予約投稿の日時を選択してください");
       return;
     }
 

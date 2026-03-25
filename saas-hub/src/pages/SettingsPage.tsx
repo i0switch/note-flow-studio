@@ -148,13 +148,13 @@ export default function SettingsPage() {
   const handleAddGenre = () => {
     const trimmed = newGenreInput.trim();
     if (!trimmed) return;
-    if (genres.includes(trimmed)) { toast.error("同じジャンルがすでにあるよ"); return; }
+    if (genres.includes(trimmed)) { toast.error("同じジャンルがすでに登録されています"); return; }
     setGenres((prev) => [...prev, trimmed]);
     setNewGenreInput("");
   };
 
   const handleRemoveGenre = (genre: string) => {
-    if (genres.length <= 1) { toast.error("ジャンルは1つ以上必要だよ"); return; }
+    if (genres.length <= 1) { toast.error("ジャンルは1つ以上必要です"); return; }
     setGenres((prev) => prev.filter((g) => g !== genre));
   };
 
@@ -293,7 +293,7 @@ export default function SettingsPage() {
       );
       await refreshProviders();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "GitHub Copilot 状態取得に失敗した");
+      toast.error(error instanceof Error ? error.message : "GitHub Copilot 状態取得に失敗しました");
     }
   };
 
@@ -403,7 +403,7 @@ export default function SettingsPage() {
               記事ジャンル
             </h2>
             <p className="text-xs text-muted-foreground">
-              生成画面のジャンル選択に表示される一覧を管理できるよ。
+              生成画面のジャンル選択に表示される一覧を管理できます。
             </p>
             <div className="flex gap-2">
               <Input
