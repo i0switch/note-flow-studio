@@ -5,8 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppData } from "@/context/AppDataContext";
-import { providerLabels } from "@/lib/app-data";
-import { ArrowLeft, Globe, Pencil, Save, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Globe, Pencil, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -96,6 +95,9 @@ export default function ArticleDetailPage() {
     }
   };
 
+  const isNoteCompleted = article.noteStatus === "published" || article.noteStatus === "saved";
+  const isNoteRunning = article.noteStatus === "running";
+
   return (
     <PageWrapper title="" description="">
       <div className="space-y-3">
@@ -110,11 +112,14 @@ export default function ArticleDetailPage() {
               <StatusBadge status={article.status} />
               <StatusBadge status={article.noteStatus} />
             </div>
-            {(article.lastNoteMethod || article.lastError || article.noteUrl) && (
+            {(article.lastError || article.noteUrl) && (
               <div className="space-y-1 text-xs text-muted-foreground">
-                {article.providerId ? <p>生成 provider: {providerLabels[article.providerId]}</p> : null}
-                {article.lastNoteMethod ? <p>保存経路: {article.lastNoteMethod}</p> : null}
-                {article.noteUrl ? <p>note URL: {article.noteUrl}</p> : null}
+                {article.noteUrl ? (
+                  <a href={article.noteUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline inline-flex items-center gap-1">
+                    <ExternalLink className="h-3 w-3" />
+                    noteで確認する
+                  </a>
+                ) : null}
                 {article.lastError && article.noteStatus !== "running" && article.noteStatus !== "pending" ? (
                   <p className="text-destructive">直近エラー: {article.lastError}</p>
                 ) : article.noteStatus === "running" ? (
@@ -124,26 +129,43 @@ export default function ArticleDetailPage() {
             )}
           </div>
           <div className="flex gap-2 shrink-0">
-            <Button variant={isEditing ? "default" : "outline"} size="sm" className="gap-1.5" onClick={() => setIsEditing((value) => !value)}>
-              <Pencil className="h-3.5 w-3.5" />
-              {isEditing ? "編集中" : "編集"}
-            </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={handleSave} disabled={noteSubmitting !== null || isDeleting}>
-              <Save className="h-3.5 w-3.5" />
-              保存
-            </Button>
-            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleNoteAction("draft")} disabled={noteSubmitting !== null || isDeleting}>
-              <Save className="h-3.5 w-3.5" />
-              NOTE保存
-            </Button>
-            <Button size="sm" className="gap-1.5" onClick={() => void handleNoteAction("publish")} disabled={noteSubmitting !== null || isDeleting}>
-              <Globe className="h-3.5 w-3.5" />
-              NOTE公開
-            </Button>
-            <Button variant="destructive" size="sm" className="gap-1.5" onClick={() => void handleDelete()} disabled={noteSubmitting !== null || isDeleting}>
-              <Trash2 className="h-3.5 w-3.5" />
-              削除
-            </Button>
+            {isNoteCompleted ? (
+              article.noteUrl ? (
+                <a href={article.noteUrl} target="_blank" rel="noopener noreferrer">
+                  <Button size="sm" className="gap-1.5">
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    noteで確認する
+                  </Button>
+                </a>
+              ) : (
+                <span className="text-xs text-muted-foreground">
+                  {article.noteStatus === "published" ? "note公開済み" : "note下書き保存済み"}
+                </span>
+              )
+            ) : (
+              <>
+                <Button variant={isEditing ? "default" : "outline"} size="sm" className="gap-1.5" onClick={() => setIsEditing((value) => !value)}>
+                  <Pencil className="h-3.5 w-3.5" />
+                  {isEditing ? "編集中" : "編集"}
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={handleSave} disabled={noteSubmitting !== null || isDeleting || isNoteRunning}>
+                  <Save className="h-3.5 w-3.5" />
+                  保存
+                </Button>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => void handleNoteAction("draft")} disabled={noteSubmitting !== null || isDeleting || isNoteRunning}>
+                  <Save className="h-3.5 w-3.5" />
+                  NOTE保存
+                </Button>
+                <Button size="sm" className="gap-1.5" onClick={() => void handleNoteAction("publish")} disabled={noteSubmitting !== null || isDeleting || isNoteRunning}>
+                  <Globe className="h-3.5 w-3.5" />
+                  NOTE公開
+                </Button>
+                <Button variant="destructive" size="sm" className="gap-1.5" onClick={() => void handleDelete()} disabled={noteSubmitting !== null || isDeleting || isNoteRunning}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  削除
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>

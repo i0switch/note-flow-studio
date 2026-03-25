@@ -160,7 +160,8 @@ async function buildArticleRecord(
   const lastAttempt = attempts[0] ?? null;
   let noteStatus: AppStatusType = "pending";
   if (lastAttempt?.result === "success") {
-    noteStatus = "saved";
+    const _noteUrl = lastAttempt.draftUrl ?? "";
+    noteStatus = _noteUrl.includes("editor.note.com") ? "saved" : "published";
   }
 
   const lastNoteUrl = lastAttempt?.draftUrl ?? null;
@@ -254,7 +255,32 @@ async function buildState(
 
   const articlesPromises = filteredJobs.map((job) => buildArticleRecord(db, job.id));
   const articlesRaw = await Promise.all(articlesPromises);
-  const articles: ArticleRecord[] = articlesRaw.filter((a): a is ArticleRecord => a !== null);
+  const dbArticles: ArticleRecord[] = articlesRaw.filter((a): a is ArticleRecord => a !== null);
+  // Merge manual articles from sidecar (non-DB-backed, string IDs like "1774326216127-e67s8w")
+  const dbIdSet = new Set(dbArticles.map((a) => String(a.id)));
+  // deletedJobIds に含まれるIDも除外（PUT /api/state 経由でサイドカーに残ったDB記事の漏れを防ぐ）
+  const deletedJobIdStrings = new Set(deletedJobIds.map(String));
+  const sidecarManualArticles: ArticleRecord[] = ((sidecar?.articles ?? []) as ArticleRecord[]).filter(
+    (a) => !dbIdSet.has(String(a.id)) && !deletedJobIdStrings.has(String(a.id))
+  );
+  // サイドカーから scheduledAt / noteStatus / noteUrl を DB 記事にマージ
+  // スケジューラーはサイドカーを更新するため、DB 記事にもその結果を反映させる必要がある
+  const sidecarById = new Map<string, ArticleRecord>(
+    ((sidecar?.articles ?? []) as ArticleRecord[]).map((a) => [String(a.id), a])
+  );
+  const dbArticlesWithSidecar = dbArticles.map((a) => {
+    const sc = sidecarById.get(String(a.id));
+    if (!sc) return a;
+    return {
+      ...a,
+      scheduledAt: sc.scheduledAt ?? a.scheduledAt,
+      // スケジューラーが published/saved に更新した場合はサイドカーを優先
+      noteStatus: (sc.noteStatus === "published" || sc.noteStatus === "saved") ? sc.noteStatus : a.noteStatus,
+      noteUrl: sc.noteUrl ?? a.noteUrl,
+      lastNoteMethod: sc.lastNoteMethod ?? a.lastNoteMethod,
+    };
+  });
+  const articles: ArticleRecord[] = [...sidecarManualArticles, ...dbArticlesWithSidecar];
 
   // settings: merge sidecar with DB row
   const [dbSettings] = await db.select().from(appSettings).where(eq(appSettings.id, 1)).limit(1);
@@ -586,27 +612,6 @@ export async function registerSaasHubAdapterRoutes(
     ) {
       await new Promise<void>((resolve) => setTimeout(resolve, INTERVAL_MS));
       jobDetail = await generationService.getJobDetail(job.id);
-    }
-
-    // Perform note action after generation
-    if (jobDetail?.status === "succeeded") {
-      try {
-        if (input.action === "draft") {
-          await noteSaveService.saveJob(job.id, {
-            noteAccountId,
-            forceMethod: null,
-            applySaleSettings: input.saleMode === "paid",
-          });
-        } else if (input.action === "publish") {
-          await noteSaveService.publishJob(job.id, {
-            noteAccountId,
-            forceMethod: null,
-            applySaleSettings: input.saleMode === "paid",
-          });
-        }
-      } catch {
-        // Non-fatal: article was generated, note save failed
-      }
     }
 
     const article = await buildArticleRecord(db, job.id);
@@ -1039,4 +1044,125 @@ export async function registerSaasHubAdapterRoutes(
     }
     reply.send({ hasSession, sessionPath });
   });
+
+  // ---- 予約投稿スケジューラー (15秒ポーリング) ----
+  let processingScheduled = false;
+
+  const processScheduledArticles = async () => {
+    if (processingScheduled) return;
+    processingScheduled = true;
+    try {
+      const raw = await stateService.load();
+      if (!raw) return;
+
+      const articles = (raw.articles ?? []) as ArticleRecord[];
+      const now = Date.now();
+
+      const due = articles.filter((a) => {
+        if (a.noteStatus !== "pending" || a.status !== "completed") return false;
+        if (!a.scheduledAt) return false;
+        const scheduled = new Date(a.scheduledAt).getTime();
+        return !Number.isNaN(scheduled) && scheduled <= now;
+      });
+
+      if (due.length === 0) return;
+
+      for (const target of due) {
+        // 処理中マークを書き込む
+        await stateService.updateSidecar((existing) => {
+          const list = (existing.articles ?? []) as ArticleRecord[];
+          return {
+            ...existing,
+            articles: list.map((a) =>
+              a.id === target.id
+                ? {
+                    ...a,
+                    noteStatus: "running" as AppStatusType,
+                    lastError: null,
+                    timeline: [
+                      ...(a.timeline ?? []),
+                      { label: "予約投稿を開始", time: new Date().toLocaleTimeString("ja-JP"), status: "info" as const },
+                    ],
+                  }
+                : a
+            ),
+          };
+        });
+
+        try {
+          const jobId = Number(target.id);
+          const result = await noteSaveService.saveContextDirect({
+            jobId: Number.isFinite(jobId) && jobId > 0 ? jobId : 0,
+            title: target.title ?? "",
+            noteBody: target.body ?? "",
+            freePreviewMarkdown: target.freeContent ?? "",
+            paidContentMarkdown: target.paidContent ?? "",
+            salesMode: target.saleMode === "paid" ? "free_paid" : "normal",
+            targetState: "published",
+            applySaleSettings: target.saleMode === "paid",
+            priceYen: target.price ?? null,
+            transitionCtaText: target.paidGuidance ?? "",
+          });
+
+          await stateService.updateSidecar((existing) => {
+            const list = (existing.articles ?? []) as ArticleRecord[];
+            return {
+              ...existing,
+              articles: list.map((a) =>
+                a.id === target.id
+                  ? {
+                      ...a,
+                      noteStatus: "published" as AppStatusType,
+                      noteUrl: result.draftUrl,
+                      lastNoteMethod: result.methodUsed,
+                      lastError: null,
+                      timeline: [
+                        ...(a.timeline ?? []),
+                        {
+                          label: "予約投稿が完了",
+                          time: new Date().toLocaleTimeString("ja-JP"),
+                          status: "success" as const,
+                          detail: `${result.methodUsed}`,
+                        },
+                      ],
+                    }
+                  : a
+              ),
+            };
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "予約投稿に失敗";
+          await stateService.updateSidecar((existing) => {
+            const list = (existing.articles ?? []) as ArticleRecord[];
+            return {
+              ...existing,
+              articles: list.map((a) =>
+                a.id === target.id
+                  ? {
+                      ...a,
+                      noteStatus: "error" as AppStatusType,
+                      lastError: message,
+                      timeline: [
+                        ...(a.timeline ?? []),
+                        {
+                          label: "予約投稿に失敗",
+                          time: new Date().toLocaleTimeString("ja-JP"),
+                          status: "error" as const,
+                          detail: message,
+                        },
+                      ],
+                    }
+                  : a
+              ),
+            };
+          });
+        }
+      }
+    } finally {
+      processingScheduled = false;
+    }
+  };
+
+  const SCHEDULE_INTERVAL_MS = Number(process.env.SAAS_HUB_SCHEDULE_INTERVAL_MS ?? 15_000);
+  setInterval(() => { void processScheduledArticles(); }, SCHEDULE_INTERVAL_MS);
 }
