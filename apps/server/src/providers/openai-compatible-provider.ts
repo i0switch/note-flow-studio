@@ -54,6 +54,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: {
           Authorization: `Bearer ${this.options.apiKey}`,
           "Content-Type": "application/json",
+          "User-Agent": "cursor/0.43.6",
         },
         body: JSON.stringify({
           model: this.options.model,
@@ -61,6 +62,8 @@ export class OpenAICompatibleProvider implements AiProvider {
           max_tokens: 32000,
           // Qwen3 などの thinking モデルでは思考を無効化して速度優先
           enable_thinking: false,
+          // JSON 形式の出力を強制（対応プロバイダーのみ有効）
+          response_format: { type: "json_object" },
         }),
         signal: AbortSignal.timeout(300_000),
       });
@@ -103,7 +106,7 @@ export class OpenAICompatibleProvider implements AiProvider {
     try {
       // First try GET /models (lightweight)
       const modelsRes = await fetch(`${this.options.baseUrl}/models`, {
-        headers: { Authorization: `Bearer ${this.options.apiKey}` },
+        headers: { Authorization: `Bearer ${this.options.apiKey}`, "User-Agent": "cursor/0.43.6" },
       });
       if (modelsRes.ok) {
         return { status: "ok", detail: `${this.options.providerName} (${this.options.model}) 接続OK` };
@@ -118,6 +121,7 @@ export class OpenAICompatibleProvider implements AiProvider {
         headers: {
           Authorization: `Bearer ${this.options.apiKey}`,
           "Content-Type": "application/json",
+          "User-Agent": "cursor/0.43.6",
         },
         body: JSON.stringify({
           model: this.options.model,
