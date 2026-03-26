@@ -106,9 +106,8 @@ export default function ArticleDetailPage() {
         title: article.title,
       });
       updateArticle(article.id, {
-        ...draft,
         headerImage: { imageId: result.imageId, path: result.path, prompt: result.prompt, source: "ai" },
-      } as typeof draft);
+      });
       toast.success("ヘッダー画像を生成しました");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "画像生成に失敗しました");
@@ -132,9 +131,8 @@ export default function ArticleDetailPage() {
       });
       const result = await uploadImageBase64(article.id, base64);
       updateArticle(article.id, {
-        ...draft,
         headerImage: { imageId: result.imageId, path: result.path, source: "upload" },
-      } as typeof draft);
+      });
       toast.success("ヘッダー画像をアップロードしました");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "アップロードに失敗しました");
@@ -146,11 +144,11 @@ export default function ArticleDetailPage() {
     if (!article.headerImage) return;
     try {
       await deleteImage(article.headerImage.imageId);
-      updateArticle(article.id, { ...draft, headerImage: null } as typeof draft);
+      updateArticle(article.id, { headerImage: null });
       toast.success("ヘッダー画像を削除しました");
     } catch {
       // ファイルが既に消えていてもstateからは消す
-      updateArticle(article.id, { ...draft, headerImage: null } as typeof draft);
+      updateArticle(article.id, { headerImage: null });
     }
   };
 

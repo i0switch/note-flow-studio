@@ -24,6 +24,8 @@ import type { NoteSaveService } from "../services/note-save-service.js";
 import type { SaasHubStateService } from "../services/saas-hub-state-service.js";
 import type { ProviderRegistry, ProviderId, ProviderSummary } from "../services/provider-registry.js";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { captureSession, getDependencyChecks, installPlaywrightBrowser, saveSetupConfig } from "../setup/setup-service.js";
 import { env, resolveDataPath } from "../config.js";
 
@@ -278,6 +280,9 @@ async function buildState(
       noteStatus: (sc.noteStatus === "published" || sc.noteStatus === "saved") ? sc.noteStatus : a.noteStatus,
       noteUrl: sc.noteUrl ?? a.noteUrl,
       lastNoteMethod: sc.lastNoteMethod ?? a.lastNoteMethod,
+      // 画像データはサイドカーにのみ保存されるためマージ
+      headerImage: (sc as Record<string, unknown>).headerImage ?? (a as Record<string, unknown>).headerImage ?? null,
+      inlineImages: (sc as Record<string, unknown>).inlineImages ?? (a as Record<string, unknown>).inlineImages ?? [],
     };
   });
   const articles: ArticleRecord[] = [...sidecarManualArticles, ...dbArticlesWithSidecar];
@@ -1165,4 +1170,129 @@ export async function registerSaasHubAdapterRoutes(
 
   const SCHEDULE_INTERVAL_MS = Number(process.env.SAAS_HUB_SCHEDULE_INTERVAL_MS ?? 15_000);
   setInterval(() => { void processScheduledArticles(); }, SCHEDULE_INTERVAL_MS);
+
+  // ---- 画像ストレージ & AI画像生成 ----
+
+  const IMAGES_DIR = resolveDataPath("images");
+
+  // GET /api/images/:imageId
+  app.get<{ Params: { imageId: string } }>("/api/images/:imageId", async (request, reply) => {
+    const { imageId } = request.params;
+    const parts = imageId.split("_");
+    if (parts.length < 2) { reply.code(400).send({ error: "Invalid imageId" }); return; }
+    const articleId = parts.slice(0, -1).join("_");
+    const filePath = path.join(IMAGES_DIR, articleId, `${parts.at(-1)}.png`);
+    try {
+      const buf = await fs.readFile(filePath);
+      reply.type("image/png").send(buf);
+    } catch {
+      reply.code(404).send({ error: "Image not found" });
+    }
+  });
+
+  // POST /api/images/upload
+  app.post("/api/images/upload", async (request, reply) => {
+    const body = request.body as { articleId?: string; base64?: string };
+    const articleId = body?.articleId ?? "unknown";
+    const base64 = body?.base64;
+    if (!base64) { reply.code(400).send({ error: "base64 is required" }); return; }
+    const uuid = randomUUID().slice(0, 8);
+    const imageId = `${articleId}_${uuid}`;
+    const dir = path.join(IMAGES_DIR, articleId);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${uuid}.png`), Buffer.from(base64, "base64"));
+    reply.send({ imageId, path: `/api/images/${imageId}` });
+  });
+
+  // DELETE /api/images/:imageId
+  app.delete<{ Params: { imageId: string } }>("/api/images/:imageId", async (request, reply) => {
+    const { imageId } = request.params;
+    const parts = imageId.split("_");
+    if (parts.length < 2) { reply.code(400).send({ error: "Invalid imageId" }); return; }
+    const articleId = parts.slice(0, -1).join("_");
+    const filePath = path.join(IMAGES_DIR, articleId, `${parts.at(-1)}.png`);
+    try { await fs.unlink(filePath); reply.send({ result: "deleted" }); } catch { reply.code(404).send({ error: "Image not found" }); }
+  });
+
+  // POST /api/images/generate-header
+  app.post("/api/images/generate-header", async (request, reply) => {
+    const body = request.body as { articleId: string; prompt?: string; keyword?: string; title?: string };
+    const articleId = body?.articleId;
+    if (!articleId) { reply.code(400).send({ error: "articleId is required" }); return; }
+
+    const prompt = body.prompt
+      ?? `${body.keyword ?? "記事"}を象徴する要素を1つ置き、読者に信頼感が伝わるアイキャッチ画像を生成してください。タイトル: ${body.title ?? ""}`;
+
+    // Mock mode check
+    if (process.env.IMAGE_GENERATOR_MOCK === "true") {
+      const uuid = randomUUID().slice(0, 8);
+      const imageId = `${articleId}_${uuid}`;
+      const dir = path.join(IMAGES_DIR, articleId);
+      await fs.mkdir(dir, { recursive: true });
+      // 1x1 赤PNG
+      const mockPng = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==", "base64");
+      await fs.writeFile(path.join(dir, `${uuid}.png`), mockPng);
+      reply.send({ imageId, path: `/api/images/${imageId}`, prompt, source: "ai", tokenInfo: { inputTokens: 50, outputTokens: 500 } });
+      return;
+    }
+
+    // Real Gemini API
+    const geminiKey = env.GEMINI_API_KEY;
+    if (!geminiKey) { reply.code(400).send({ error: "Gemini API キーが設定されていません" }); return; }
+
+    try {
+      // count_tokens プリチェック
+      const countRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:countTokens?key=${geminiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (countRes.ok) {
+        const countData = await countRes.json() as { totalTokens?: number };
+        if ((countData.totalTokens ?? 0) > 10_000) {
+          reply.code(400).send({ error: `プロンプトが長すぎます（${countData.totalTokens} tokens）`, tokenCount: countData.totalTokens });
+          return;
+        }
+      }
+
+      // 画像生成
+      const genRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseModalities: ["TEXT", "IMAGE"], imageConfig: { aspectRatio: "16:9", imageSize: "1K" } },
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      if (!genRes.ok) {
+        const errText = await genRes.text().catch(() => "");
+        const code = genRes.status === 429 ? "RATE_LIMIT" : genRes.status >= 500 ? "SERVER_ERROR" : "UNKNOWN";
+        reply.code(genRes.status === 429 ? 429 : 502).send({ error: `Gemini API error ${genRes.status}: ${errText.slice(0, 200)}`, errorCode: code });
+        return;
+      }
+
+      const data = await genRes.json() as { candidates?: { content?: { parts?: { inlineData?: { mimeType: string; data: string } }[] } }[]; usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } };
+      const imgPart = data.candidates?.[0]?.content?.parts?.find((p: { inlineData?: { data: string } }) => p.inlineData?.data);
+      if (!imgPart?.inlineData?.data) { reply.code(502).send({ error: "Gemini API から画像データが返されませんでした", errorCode: "NO_IMAGE" }); return; }
+
+      const uuid = randomUUID().slice(0, 8);
+      const imageId = `${articleId}_${uuid}`;
+      const dir = path.join(IMAGES_DIR, articleId);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, `${uuid}.png`), Buffer.from(imgPart.inlineData.data, "base64"));
+
+      reply.send({
+        imageId,
+        path: `/api/images/${imageId}`,
+        prompt,
+        source: "ai",
+        tokenInfo: data.usageMetadata ? { inputTokens: data.usageMetadata.promptTokenCount ?? 0, outputTokens: data.usageMetadata.candidatesTokenCount ?? 0 } : undefined,
+      });
+    } catch (err) {
+      reply.code(500).send({ error: err instanceof Error ? err.message : "画像生成に失敗しました" });
+    }
+  });
 }
