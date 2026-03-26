@@ -5,10 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useAppData } from "@/context/AppDataContext";
-import { ArrowLeft, ExternalLink, Globe, Pencil, Save, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, ExternalLink, Globe, ImagePlus, Loader2, Pencil, Save, Sparkles, Trash2, Upload } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { generateHeaderImage, uploadImageBase64, deleteImage } from "@/lib/note-api";
 
 export default function ArticleDetailPage() {
   const navigate = useNavigate();
@@ -18,6 +19,8 @@ export default function ArticleDetailPage() {
   const [noteSubmitting, setNoteSubmitting] = useState<"draft" | "publish" | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState({
     title: "",
     freeContent: "",
@@ -92,6 +95,62 @@ export default function ArticleDetailPage() {
       toast.error(error instanceof Error ? error.message : "note 投稿に失敗しました");
     } finally {
       setNoteSubmitting(null);
+    }
+  };
+
+  const handleGenerateHeaderImage = async () => {
+    setIsGeneratingImage(true);
+    try {
+      const result = await generateHeaderImage(article.id, {
+        keyword: article.keyword,
+        title: article.title,
+      });
+      updateArticle(article.id, {
+        ...draft,
+        headerImage: { imageId: result.imageId, path: result.path, prompt: result.prompt, source: "ai" },
+      } as typeof draft);
+      toast.success("ヘッダー画像を生成しました");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "画像生成に失敗しました");
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const handleUploadHeaderImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(",")[1]); // data:image/...;base64,XXXX → XXXX
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const result = await uploadImageBase64(article.id, base64);
+      updateArticle(article.id, {
+        ...draft,
+        headerImage: { imageId: result.imageId, path: result.path, source: "upload" },
+      } as typeof draft);
+      toast.success("ヘッダー画像をアップロードしました");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "アップロードに失敗しました");
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleDeleteHeaderImage = async () => {
+    if (!article.headerImage) return;
+    try {
+      await deleteImage(article.headerImage.imageId);
+      updateArticle(article.id, { ...draft, headerImage: null } as typeof draft);
+      toast.success("ヘッダー画像を削除しました");
+    } catch {
+      // ファイルが既に消えていてもstateからは消す
+      updateArticle(article.id, { ...draft, headerImage: null } as typeof draft);
     }
   };
 
@@ -182,6 +241,53 @@ export default function ArticleDetailPage() {
             <span className="section-label">タイトル</span>
             {isEditing ? <Textarea value={draft.title} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} /> : <p className="text-base font-semibold">{article.title}</p>}
           </div>
+          <div className="space-y-3 rounded-lg border border-border bg-card p-5">
+            <span className="section-label">ヘッダー画像（アイキャッチ）</span>
+            {article.headerImage ? (
+              <div className="space-y-2">
+                <img
+                  src={article.headerImage.path}
+                  alt="ヘッダー画像"
+                  className="w-full rounded-lg border border-border object-cover"
+                  style={{ maxHeight: "300px" }}
+                />
+                {article.headerImage.prompt && (
+                  <p className="text-xs text-muted-foreground">プロンプト: {article.headerImage.prompt.slice(0, 80)}...</p>
+                )}
+              </div>
+            ) : (
+              <div className="flex h-40 items-center justify-center rounded-lg border-2 border-dashed border-border/60 bg-muted/20">
+                <div className="text-center text-sm text-muted-foreground">
+                  <ImagePlus className="mx-auto mb-1.5 h-8 w-8 opacity-40" />
+                  画像が設定されていません
+                </div>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                onClick={handleGenerateHeaderImage}
+                disabled={isGeneratingImage}
+              >
+                {isGeneratingImage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                {isGeneratingImage ? "生成中..." : "AI生成"}
+              </Button>
+              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => fileInputRef.current?.click()}>
+                <Upload className="h-3.5 w-3.5" />
+                アップロード
+              </Button>
+              {article.headerImage && (
+                <Button size="sm" variant="ghost" className="gap-1.5 text-destructive" onClick={handleDeleteHeaderImage}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  削除
+                </Button>
+              )}
+            </div>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleUploadHeaderImage} />
+          </div>
+
           <div className="space-y-2 rounded-lg border border-border bg-card p-5">
             <span className="section-label">無料部分</span>
             {isEditing ? <Textarea rows={6} value={draft.freeContent} onChange={(event) => setDraft((current) => ({ ...current, freeContent: event.target.value }))} /> : <p className="whitespace-pre-wrap text-sm leading-relaxed">{article.freeContent}</p>}

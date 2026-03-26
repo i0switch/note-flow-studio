@@ -86,6 +86,18 @@ export type ArticleRecord = {
   saleSettingStatus?: SaleSettingStatus | null;
   lastError?: string | null;
   pendingNoteAction?: "publish" | "draft" | "schedule" | null;
+  headerImage?: {
+    imageId: string;
+    path: string;
+    prompt?: string;
+    source: "ai" | "upload";
+  } | null;
+  inlineImages?: {
+    imageId: string;
+    path: string;
+    insertAfter: "freeContent" | "paidGuidance" | "paidContent";
+    source: "ai" | "upload";
+  }[];
 };
 
 export type DiagnosticsRecord = {

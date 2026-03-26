@@ -58,6 +58,9 @@ export default function GeneratePage() {
   const [referenceFiles, setReferenceFiles] = useState<{ name: string; content: string }[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // ヘッダー画像自動生成
+  const [generateHeaderOnComplete, setGenerateHeaderOnComplete] = useState(false);
+
   // プレビュー機能
   const [showPreviewOnComplete, setShowPreviewOnComplete] = useState(false);
   const [previewArticle, setPreviewArticle] = useState<Partial<ArticleRecord> | null>(null);
@@ -196,6 +199,25 @@ export default function GeneratePage() {
 
       // 生成完了
       if (progressTimerRef.current) { clearInterval(progressTimerRef.current); progressTimerRef.current = null; }
+
+      // ヘッダー画像自動生成（ONの場合）
+      if (generateHeaderOnComplete && resolvedArticle.id) {
+        setGenerationProgress(78);
+        setGenerationStep("ヘッダー画像を AI 生成中...");
+        try {
+          const { generateHeaderImage: genImg } = await import("@/lib/note-api");
+          const imgResult = await genImg(resolvedArticle.id, {
+            keyword: keyword.trim(),
+            title: resolvedArticle.title,
+          });
+          updateArticle(resolvedArticle.id, {
+            headerImage: { imageId: imgResult.imageId, path: imgResult.path, prompt: imgResult.prompt, source: "ai" },
+          });
+        } catch {
+          toast.error("ヘッダー画像の自動生成に失敗しました（記事は正常に生成されています）");
+        }
+      }
+
       setGenerationProgress(82);
       setGenerationStep("note に保存中...");
 
@@ -418,6 +440,16 @@ export default function GeneratePage() {
             <div className="space-y-1.5">
               <Label className="text-xs text-muted-foreground">補足指示</Label>
               <Textarea placeholder="追加の指示があれば入力..." rows={3} value={instruction} onChange={(event) => setInstruction(event.target.value)} />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border border-border/60 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">ヘッダー画像を自動生成する</p>
+                <p className="text-xs text-muted-foreground">Gemini AI でアイキャッチ画像を自動作成します</p>
+              </div>
+              <Switch
+                checked={generateHeaderOnComplete}
+                onCheckedChange={setGenerateHeaderOnComplete}
+              />
             </div>
             <div className="flex items-center justify-between rounded-xl border border-border/60 px-4 py-3">
               <div>

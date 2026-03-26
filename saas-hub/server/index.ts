@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { z } from "zod";
@@ -201,6 +204,18 @@ const stateSchema = z.object({
       lastError: z.string().nullable().optional(),
       heroImagePrompt: z.string().nullable().optional(),
       heroImageCaption: z.string().nullable().optional(),
+      headerImage: z.object({
+        imageId: z.string(),
+        path: z.string(),
+        prompt: z.string().optional(),
+        source: z.enum(["ai", "upload"]),
+      }).nullable().optional(),
+      inlineImages: z.array(z.object({
+        imageId: z.string(),
+        path: z.string(),
+        insertAfter: z.enum(["freeContent", "paidGuidance", "paidContent"]),
+        source: z.enum(["ai", "upload"]),
+      })).optional().default([]),
       graphTitle: z.string().nullable().optional(),
       graphUnit: z.string().nullable().optional(),
       graphData: z.array(
@@ -418,7 +433,7 @@ const processScheduledArticles = async () => {
           label: "予約投稿が完了",
           time: nowTime(),
           status: "success",
-          detail: `${result.method} / sale=${result.saleSettingStatus}`,
+          detail: "予約投稿で公開完了",
         });
       } catch (error) {
         target.noteStatus = "error";
@@ -600,10 +615,28 @@ app.put("/api/state", async (request) => {
   return { result: "success" as const, providers: normalized.settings.providerSummaries };
 });
 
+const patchArticleNoteState = async (
+  articleId: string,
+  noteStatus: string,
+  result: { draftUrl: string; method: "unofficial_api" | "playwright" | "pinchtab"; saleSettingStatus: "not_required" | "applied" | "failed" },
+) => {
+  const saved = await loadAppState();
+  if (!saved) return;
+  const state = await normalizeState(saved as Partial<StoredState>);
+  const article = state.articles.find((a) => a.id === articleId);
+  if (!article) return;
+  article.noteStatus = noteStatus;
+  article.noteUrl = result.draftUrl;
+  article.lastNoteMethod = result.method;
+  article.saleSettingStatus = result.saleSettingStatus;
+  await saveAppState(state);
+};
+
 app.post("/api/note/draft", async (request, reply) => {
   const body = noteRequestSchema.parse(request.body);
   try {
     const result = await saveArticleToNote(body.article, await toRuntimeSettings(body.settings), "draft");
+    await patchArticleNoteState(body.article.id, "saved", result);
     reply.send(result);
   } catch (error) {
     reply.code(400).send({
@@ -619,6 +652,7 @@ app.post("/api/note/publish", async (request, reply) => {
   const body = noteRequestSchema.parse(request.body);
   try {
     const result = await saveArticleToNote(body.article, await toRuntimeSettings(body.settings), "published");
+    await patchArticleNoteState(body.article.id, "published", result);
     reply.send(result);
   } catch (error) {
     reply.code(400).send({
@@ -684,6 +718,133 @@ app.post("/api/playwright/install", async (_request, reply) => {
     result: "success",
     output,
   });
+});
+
+// ---- 画像ストレージ & AI画像生成 ----
+
+const DATA_DIR = process.env.DATA_DIR ?? path.resolve("data");
+const IMAGES_DIR = path.join(DATA_DIR, "images");
+
+// GET /api/images/:imageId — 画像配信
+app.get<{ Params: { imageId: string } }>("/api/images/:imageId", async (request, reply) => {
+  const { imageId } = request.params;
+  // imageId = "{articleId}_{uuid}" format; file at data/images/{articleId}/{uuid}.png
+  const parts = imageId.split("_");
+  if (parts.length < 2) { reply.code(400).send({ error: "Invalid imageId" }); return; }
+  const articleId = parts.slice(0, -1).join("_");
+  const filePath = path.join(IMAGES_DIR, articleId, `${parts.at(-1)}.png`);
+  try {
+    const buf = await fs.readFile(filePath);
+    reply.type("image/png").send(buf);
+  } catch {
+    reply.code(404).send({ error: "Image not found" });
+  }
+});
+
+// POST /api/images/upload — 画像アップロード（Base64 or raw）
+app.post("/api/images/upload", async (request, reply) => {
+  const body = request.body as { articleId?: string; base64?: string; filename?: string };
+  const articleId = body?.articleId ?? "unknown";
+  const base64 = body?.base64;
+  if (!base64) { reply.code(400).send({ error: "base64 is required" }); return; }
+
+  const uuid = randomUUID().slice(0, 8);
+  const imageId = `${articleId}_${uuid}`;
+  const dir = path.join(IMAGES_DIR, articleId);
+  await fs.mkdir(dir, { recursive: true });
+  const filePath = path.join(dir, `${uuid}.png`);
+  await fs.writeFile(filePath, Buffer.from(base64, "base64"));
+  reply.send({ imageId, path: `/api/images/${imageId}` });
+});
+
+// DELETE /api/images/:imageId — 画像削除
+app.delete<{ Params: { imageId: string } }>("/api/images/:imageId", async (request, reply) => {
+  const { imageId } = request.params;
+  const parts = imageId.split("_");
+  if (parts.length < 2) { reply.code(400).send({ error: "Invalid imageId" }); return; }
+  const articleId = parts.slice(0, -1).join("_");
+  const filePath = path.join(IMAGES_DIR, articleId, `${parts.at(-1)}.png`);
+  try {
+    await fs.unlink(filePath);
+    reply.send({ result: "deleted" });
+  } catch {
+    reply.code(404).send({ error: "Image not found" });
+  }
+});
+
+// POST /api/images/generate-header — Gemini AI でヘッダー画像を生成
+app.post("/api/images/generate-header", async (request, reply) => {
+  const body = request.body as { articleId: string; prompt?: string; keyword?: string; title?: string };
+  const articleId = body?.articleId;
+  if (!articleId) { reply.code(400).send({ error: "articleId is required" }); return; }
+
+  // プロンプト: 指定がなければキーワード+タイトルから自動生成
+  const prompt = body.prompt
+    ?? `${body.keyword ?? "記事"}を象徴する要素を1つ置き、読者に信頼感が伝わるアイキャッチ画像を生成してください。タイトル: ${body.title ?? ""}`;
+
+  // Gemini API Key を取得
+  const secrets = await loadProviderSecrets();
+  const geminiKey = secrets.gemini?.apiKey || process.env.GEMINI_API_KEY;
+  if (!geminiKey) {
+    reply.code(400).send({ error: "Gemini API キーが設定されていません" });
+    return;
+  }
+
+  try {
+    const geminiRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseModalities: ["TEXT", "IMAGE"],
+            imageConfig: {
+              aspectRatio: "16:9",
+              imageSize: "1K",
+            },
+          },
+        }),
+        signal: AbortSignal.timeout(120_000),
+      },
+    );
+
+    if (!geminiRes.ok) {
+      const errText = await geminiRes.text().catch(() => "");
+      reply.code(502).send({ error: `Gemini API error ${geminiRes.status}: ${errText.slice(0, 200)}` });
+      return;
+    }
+
+    const data = await geminiRes.json() as {
+      candidates?: { content?: { parts?: { inlineData?: { mimeType: string; data: string }; text?: string }[] } }[];
+    };
+
+    // Base64画像データを探す
+    const imagePart = data.candidates?.[0]?.content?.parts?.find(
+      (p: { inlineData?: { data: string } }) => p.inlineData?.data,
+    );
+    if (!imagePart?.inlineData?.data) {
+      reply.code(502).send({ error: "Gemini API から画像データが返されませんでした" });
+      return;
+    }
+
+    // ファイルに保存
+    const uuid = randomUUID().slice(0, 8);
+    const imageId = `${articleId}_${uuid}`;
+    const dir = path.join(IMAGES_DIR, articleId);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${uuid}.png`), Buffer.from(imagePart.inlineData.data, "base64"));
+
+    reply.send({
+      imageId,
+      path: `/api/images/${imageId}`,
+      prompt,
+      source: "ai" as const,
+    });
+  } catch (err) {
+    reply.code(500).send({ error: err instanceof Error ? err.message : "画像生成に失敗しました" });
+  }
 });
 
 const port = Number(process.env.SAAS_HUB_API_PORT ?? 3001);

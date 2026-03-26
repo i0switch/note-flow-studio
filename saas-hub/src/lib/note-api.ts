@@ -278,3 +278,23 @@ export const regenerateArticleAssets = (
     method: "POST",
     body: JSON.stringify({ article, settings, providerId }),
   });
+
+// ---- 画像 API ----
+
+export const generateHeaderImage = (
+  articleId: string,
+  options?: { prompt?: string; keyword?: string; title?: string },
+) =>
+  requestJson<{ imageId: string; path: string; prompt: string; source: "ai" }>("/api/images/generate-header", {
+    method: "POST",
+    body: JSON.stringify({ articleId, ...options }),
+  });
+
+export const uploadImageBase64 = (articleId: string, base64: string) =>
+  requestJson<{ imageId: string; path: string }>("/api/images/upload", {
+    method: "POST",
+    body: JSON.stringify({ articleId, base64 }),
+  });
+
+export const deleteImage = (imageId: string) =>
+  requestJson<{ result: string }>(`/api/images/${imageId}`, { method: "DELETE" });
