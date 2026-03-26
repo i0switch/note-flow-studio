@@ -21,6 +21,7 @@ import {
 } from "./aiProviders";
 import { loadProviderSecrets, type ProviderId } from "./providerSecretsStore";
 import { runDiagnostics, saveArticleToNote, type RuntimeSettings } from "./noteAutomation";
+import { getImageGenerator, type ImageGenerationError } from "./imageGenerator";
 
 const app = Fastify({ logger: false });
 
@@ -772,78 +773,81 @@ app.delete<{ Params: { imageId: string } }>("/api/images/:imageId", async (reque
   }
 });
 
-// POST /api/images/generate-header — Gemini AI でヘッダー画像を生成
+// POST /api/images/generate-header — ImageGenerator 経由でヘッダー画像を生成
 app.post("/api/images/generate-header", async (request, reply) => {
   const body = request.body as { articleId: string; prompt?: string; keyword?: string; title?: string };
   const articleId = body?.articleId;
   if (!articleId) { reply.code(400).send({ error: "articleId is required" }); return; }
 
-  // プロンプト: 指定がなければキーワード+タイトルから自動生成
   const prompt = body.prompt
     ?? `${body.keyword ?? "記事"}を象徴する要素を1つ置き、読者に信頼感が伝わるアイキャッチ画像を生成してください。タイトル: ${body.title ?? ""}`;
 
-  // Gemini API Key を取得
-  const secrets = await loadProviderSecrets();
-  const geminiKey = secrets.gemini?.apiKey || process.env.GEMINI_API_KEY;
-  if (!geminiKey) {
-    reply.code(400).send({ error: "Gemini API キーが設定されていません" });
+  // ImageGenerator を取得（Mock / Real を自動切り替え）
+  let generator;
+  try {
+    const secrets = await loadProviderSecrets();
+    const geminiKey = secrets.gemini?.apiKey || process.env.GEMINI_API_KEY;
+    generator = getImageGenerator(geminiKey ?? undefined);
+  } catch (err) {
+    reply.code(400).send({ error: err instanceof Error ? err.message : "画像生成の初期化に失敗しました" });
     return;
   }
 
   try {
-    const geminiRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent?key=${geminiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseModalities: ["TEXT", "IMAGE"],
-            imageConfig: {
-              aspectRatio: "16:9",
-              imageSize: "1K",
-            },
-          },
-        }),
-        signal: AbortSignal.timeout(120_000),
-      },
-    );
-
-    if (!geminiRes.ok) {
-      const errText = await geminiRes.text().catch(() => "");
-      reply.code(502).send({ error: `Gemini API error ${geminiRes.status}: ${errText.slice(0, 200)}` });
+    // Step 1: count_tokens でプリチェック（トークン数が多すぎないか確認）
+    const tokenCheck = await generator.countTokens(prompt);
+    if (tokenCheck.totalTokens > 10_000) {
+      reply.code(400).send({
+        error: `プロンプトが長すぎます（${tokenCheck.totalTokens} tokens）。10,000 tokens 以下にしてください。`,
+        tokenCount: tokenCheck.totalTokens,
+      });
       return;
     }
 
-    const data = await geminiRes.json() as {
-      candidates?: { content?: { parts?: { inlineData?: { mimeType: string; data: string }; text?: string }[] } }[];
-    };
+    // Step 2: 画像生成
+    const result = await generator.generate(prompt, { aspectRatio: "16:9", imageSize: "1K" });
 
-    // Base64画像データを探す
-    const imagePart = data.candidates?.[0]?.content?.parts?.find(
-      (p: { inlineData?: { data: string } }) => p.inlineData?.data,
-    );
-    if (!imagePart?.inlineData?.data) {
-      reply.code(502).send({ error: "Gemini API から画像データが返されませんでした" });
-      return;
-    }
-
-    // ファイルに保存
+    // Step 3: ファイルに保存
     const uuid = randomUUID().slice(0, 8);
     const imageId = `${articleId}_${uuid}`;
     const dir = path.join(IMAGES_DIR, articleId);
     await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, `${uuid}.png`), Buffer.from(imagePart.inlineData.data, "base64"));
+    await fs.writeFile(path.join(dir, `${uuid}.png`), Buffer.from(result.base64, "base64"));
 
     reply.send({
       imageId,
       path: `/api/images/${imageId}`,
       prompt,
       source: "ai" as const,
+      tokenInfo: result.tokenInfo,
     });
   } catch (err) {
-    reply.code(500).send({ error: err instanceof Error ? err.message : "画像生成に失敗しました" });
+    const imgErr = err as Partial<ImageGenerationError>;
+    const status = imgErr.code === "RATE_LIMIT" ? 429
+      : imgErr.code === "SAFETY_BLOCK" ? 400
+      : imgErr.code === "SERVER_ERROR" ? 502
+      : imgErr.code === "TIMEOUT" ? 408
+      : 500;
+    reply.code(status).send({
+      error: err instanceof Error ? err.message : "画像生成に失敗しました",
+      errorCode: imgErr.code ?? "UNKNOWN",
+    });
+  }
+});
+
+// POST /api/images/count-tokens — 画像生成前のトークン数チェック
+app.post("/api/images/count-tokens", async (request, reply) => {
+  const body = request.body as { prompt: string };
+  if (!body?.prompt) { reply.code(400).send({ error: "prompt is required" }); return; }
+
+  try {
+    const secrets = await loadProviderSecrets();
+    const geminiKey = secrets.gemini?.apiKey || process.env.GEMINI_API_KEY;
+    const generator = getImageGenerator(geminiKey ?? undefined);
+    const result = await generator.countTokens(body.prompt);
+    reply.send(result);
+  } catch (err) {
+    reply.code(500).send({ error: err instanceof Error ? err.message : "トークン数の確認に失敗しました" });
   }
 });
 
